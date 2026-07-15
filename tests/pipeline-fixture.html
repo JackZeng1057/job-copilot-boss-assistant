@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Job Copilot Pipeline Fixture</title>
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body { margin: 0; padding: 24px; background: #f1f5f9; font: 14px/1.5 sans-serif; }
+    .fixture-toolbar { display: flex; gap: 8px; margin-bottom: 16px; }
+    .fixture-toolbar button { padding: 8px 12px; }
+    .fixture-layout { display: grid; grid-template-columns: 360px 1fr; gap: 16px; }
+    .job-card-wrapper, .job-detail { padding: 12px; margin-bottom: 8px; background: #fff; border: 1px solid #cbd5e1; }
+    .job-card-wrapper a { color: #0f172a; text-decoration: none; }
+    .job-name { font-weight: 700; }
+    .salary { color: #dc2626; }
+    .modal { position: fixed; inset: 30% auto auto 40%; z-index: 20; padding: 20px; background: #fff; border: 2px solid #0f766e; }
+  </style>
+</head>
+<body>
+  <div class="fixture-toolbar">
+    <button id="fixture-page-a">页面 A</button>
+    <button id="fixture-page-b">页面 B</button>
+    <a id="fixture-message" href="https://www.zhipin.com/web/geek/chat">消息</a>
+    <span id="fixture-contact-count">沟通 0</span>
+  </div>
+  <div class="fixture-layout">
+    <div id="fixture-list"></div>
+    <div class="job-detail" id="fixture-detail"></div>
+  </div>
+  <script>
+    const fixturePages = {
+      a: [
+        ["A-前端工程师", "甲公司", "上海", "12-18K", 76],
+        ["A-低分岗位", "乙公司", "上海", "8-10K", 42],
+        ["A-测试工程师", "丙公司", "上海", "10-15K", 71]
+      ],
+      b: [
+        ["B-产品助理", "丁公司", "杭州", "9-13K", 68],
+        ["B-技术支持", "戊公司", "杭州", "10-14K", 73],
+        ["B-低分岗位", "己公司", "杭州", "7-9K", 38]
+      ]
+    };
+    let fixtureContactCount = 0;
+    let fixturePage = "a";
+    const fixtureParams = new URLSearchParams(location.search);
+    const fixtureAnalysisDelay = fixtureParams.has("slow") ? 10000 : 900;
+
+    window.confirm = () => true;
+    window.chrome = {
+      runtime: {
+        id: "job-copilot-pipeline-fixture",
+        lastError: null,
+        onMessage: { addListener() {} },
+        sendMessage(message, callback) {
+          if (message.type === "getSettings") {
+            setTimeout(() => callback({
+              ok: true,
+              settings: {
+                minScore: 60,
+                autoRunOnJobsPage: false,
+                restrictTargetLocation: false,
+                profile: "default",
+                currentLocation: "",
+                targetDirections: "通用",
+                customInstructions: "",
+                greetingStyle: "简洁"
+              }
+            }), 0);
+            return;
+          }
+          if ([
+            "registerAutomationSession", "updateAutomationSession", "appendAutomationLog",
+            "focusAutomationTab", "controlAutomationTab"
+          ].includes(message.type)) {
+            setTimeout(() => callback({ ok: true }), 0);
+            return;
+          }
+          if (message.type === "getAutomationSession") {
+            setTimeout(() => callback({ ok: true, session: null, isOwner: false }), 0);
+            return;
+          }
+          if (message.type === "analyzeJob") {
+            if (fixtureParams.has("invalidated")) {
+              setTimeout(() => {
+                window.chrome.runtime.lastError = { message: "Extension context invalidated." };
+                callback(undefined);
+                window.chrome.runtime.lastError = null;
+              }, 50);
+              return;
+            }
+            if (fixtureParams.has("network")) {
+              setTimeout(() => callback({ ok: false, error: "TypeError: Failed to fetch" }), 50);
+              return;
+            }
+            if (fixtureParams.has("truncated")) {
+              setTimeout(() => callback({ ok: false, error: "Unexpected end of JSON input" }), 50);
+              return;
+            }
+            const source = fixturePages.a.concat(fixturePages.b).find((item) => item[0] === message.payload.jobName || item[0] === message.payload.title.split(" ")[0]);
+            const score = source ? source[4] : (message.payload.title.includes("低分") ? 40 : 72);
+            setTimeout(() => callback({
+              ok: true,
+              analysis: { score, decision: score >= 60 ? "recommend" : "manual_review", reasons: ["fixture"], greeting: "fixture" }
+            }), fixtureAnalysisDelay);
+          }
+        }
+      },
+      storage: { local: { set(_value, callback) { callback?.(); } } }
+    };
+
+    function renderFixturePage(page) {
+      fixturePage = page;
+      const list = document.getElementById("fixture-list");
+      list.innerHTML = "";
+      for (const [title, company, city, salary] of fixturePages[page]) {
+        const card = document.createElement("div");
+        card.className = "job-card-wrapper";
+        card.innerHTML = `<a href="/job_detail/${encodeURIComponent(title)}"><div class="job-name">${title}</div></a><div class="company-name">${company}</div><div>${city} · 经验不限 · 本科 · JavaScript · 测试</div><div class="salary">${salary}</div>`;
+        card.addEventListener("click", (event) => {
+          if (event.defaultPrevented) return;
+          event.preventDefault();
+          setTimeout(() => renderFixtureDetail(title, company, city), 250);
+        });
+        list.appendChild(card);
+      }
+      const first = fixturePages[page][0];
+      renderFixtureDetail(first[0], first[1], first[2]);
+    }
+
+    function renderFixtureDetail(title, company, city) {
+      const detail = document.getElementById("fixture-detail");
+      detail.innerHTML = `<h2>${title}</h2><p>${company} · ${city}</p><button id="fixture-communicate">立即沟通</button>`;
+      detail.querySelector("button").addEventListener("click", () => {
+        const modal = document.createElement("div");
+        modal.className = "modal";
+        modal.setAttribute("role", "dialog");
+        modal.innerHTML = `<p>已向BOSS发送消息</p><button>留在此页</button>`;
+        modal.querySelector("button").addEventListener("click", () => {
+          fixtureContactCount += 1;
+          document.getElementById("fixture-contact-count").textContent = `沟通 ${fixtureContactCount}`;
+          modal.remove();
+        });
+        document.body.appendChild(modal);
+      });
+    }
+
+    document.getElementById("fixture-page-a").addEventListener("click", () => renderFixturePage("a"));
+    document.getElementById("fixture-page-b").addEventListener("click", () => renderFixturePage("b"));
+    renderFixturePage("a");
+  </script>
+  <script src="../content.js"></script>
+</body>
+</html>

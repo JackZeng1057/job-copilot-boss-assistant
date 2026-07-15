@@ -1,0 +1,15 @@
+.DS_Store
+.playwright-cli/
+output/
+*.log
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.key
+local-config.*
+chrome-profile/
+edge-profile/
+browser-profile/

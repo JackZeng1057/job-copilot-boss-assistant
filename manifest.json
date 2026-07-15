@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Job Copilot BOSS 助手",
+  "version": "0.6.1",
+  "description": "在真实 BOSS 直聘页面内扫描岗位、AI 匹配简历，并在职位页完成达标岗位沟通。",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": [
+    "https://www.zhipin.com/*",
+    "https://api.deepseek.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "action": {
+    "default_title": "Job Copilot",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.zhipin.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

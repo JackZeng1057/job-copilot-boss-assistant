@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --line: #e3e8ef;
+      --text: #111827;
+      --muted: #667085;
+      --primary: #2563eb;
+      --primary-soft: #eef4ff;
+      --teal: #0f766e;
+      --amber: #b54708;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      width: 336px;
+      max-height: 590px;
+      overflow: auto;
+      margin: 0;
+      padding: 0;
+      font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+    h1 {
+      font-size: 17px;
+      margin: 0;
+      line-height: 1.2;
+    }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      padding: 12px;
+      background: rgba(255, 255, 255, .94);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(12px);
+    }
+    .title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .subtitle {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #ecfdf8;
+      color: var(--teal);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .pill::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--teal);
+    }
+    label {
+      display: block;
+      margin: 9px 0 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid #d5dce8;
+      border-radius: 8px;
+      padding: 6px 8px;
+      font: inherit;
+      background: var(--panel);
+      color: var(--text);
+      outline: none;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, .12);
+    }
+    input[type="file"] {
+      padding: 6px;
+      background: var(--panel);
+    }
+    .file-picker {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 40px;
+      margin: 4px 0 6px;
+      padding: 7px 8px;
+      border: 1px solid #d5dce8;
+      border-radius: 8px;
+      background: #fbfcfe;
+    }
+    .file-picker.is-imported {
+      border-color: rgba(15, 118, 110, .3);
+      background: #ecfdf8;
+    }
+    .file-picker.is-error {
+      border-color: rgba(181, 71, 8, .32);
+      background: #fffaeb;
+    }
+    .file-input {
+      display: none;
+    }
+    .file-status {
+      min-width: 0;
+      flex: 1;
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .file-picker.is-imported .file-status {
+      color: var(--teal);
+      font-weight: 700;
+    }
+    .file-picker.is-error .file-status {
+      color: var(--amber);
+    }
+    .file-action {
+      width: auto;
+      flex: 0 0 auto;
+      padding: 5px 8px;
+      border-radius: 7px;
+      font-size: 12px;
+    }
+    .file-clear {
+      display: none;
+      border-color: #d5dce8;
+      background: #fff;
+      color: var(--muted);
+    }
+    .file-picker.is-imported .file-clear {
+      display: inline-flex;
+    }
+    textarea {
+      min-height: 64px;
+      resize: vertical;
+    }
+    .section {
+      margin: 10px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+    }
+    .section-title {
+      font-weight: 700;
+      color: var(--text);
+      margin: 0 0 4px;
+    }
+    .section-caption {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+    details.section {
+      padding: 0;
+      overflow: hidden;
+    }
+    details.section > summary {
+      padding: 11px 12px;
+      cursor: pointer;
+      font-weight: 700;
+      color: var(--text);
+      list-style: none;
+      background: linear-gradient(180deg, #fff, #fbfdff);
+    }
+    details.section > summary::-webkit-details-marker {
+      display: none;
+    }
+    details.section > summary::after {
+      content: "展开";
+      float: right;
+      color: var(--muted);
+      font-weight: 400;
+      font-size: 12px;
+    }
+    details.section[open] > summary::after {
+      content: "收起";
+    }
+    .section-body {
+      padding: 0 12px 12px;
+      border-top: 1px solid #f0f3f8;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    button {
+      width: 100%;
+      border: 1px solid var(--primary);
+      background: var(--primary);
+      color: white;
+      border-radius: 8px;
+      padding: 9px;
+      font: inherit;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .note {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .api-advanced {
+      margin-top: 10px;
+      border-top: 1px solid var(--line);
+    }
+    .api-advanced > summary {
+      padding: 9px 0 2px;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .api-advanced-body {
+      padding-top: 2px;
+    }
+    .check-row {
+      display: grid;
+      gap: 8px;
+      margin-top: 2px;
+    }
+    .check-row label {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin: 0;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+      color: var(--text);
+    }
+    .check-row input {
+      margin-top: 2px;
+    }
+    .footer {
+      position: sticky;
+      bottom: 0;
+      z-index: 3;
+      padding: 10px;
+      background: rgba(255, 255, 255, .95);
+      border-top: 1px solid var(--line);
+      box-shadow: 0 -6px 18px rgba(15, 23, 42, .08);
+      backdrop-filter: blur(12px);
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="title-row">
+      <h1>Job Copilot</h1>
+      <span class="pill">本机配置</span>
+    </div>
+    <div class="subtitle">BOSS 岗位筛选、AI 评分与职位页沟通</div>
+  </header>
+  <section class="section">
+    <div class="section-title">AI 后台</div>
+    <div class="section-caption">支持常见厂商预设、原生协议和自定义兼容接口</div>
+    <label>服务商/预设</label>
+    <select id="aiProvider">
+      <option value="deepseek">DeepSeek</option>
+      <option value="openai">OpenAI</option>
+      <option value="anthropic">Anthropic Claude</option>
+      <option value="gemini">Google Gemini</option>
+      <option value="qwen">阿里云百炼 / 通义千问</option>
+      <option value="moonshot">Moonshot / Kimi</option>
+      <option value="zhipu">智谱 GLM</option>
+      <option value="siliconflow">SiliconFlow</option>
+      <option value="openrouter">OpenRouter</option>
+      <option value="groq">Groq</option>
+      <option value="together">Together AI</option>
+      <option value="ollama">Ollama 本机</option>
+      <option value="azure">Azure OpenAI</option>
+      <option value="custom">其他/自定义</option>
+    </select>
+    <label>API Key</label>
+    <input id="apiKey" type="password" autocomplete="off" placeholder="由服务商提供；本机接口可留空" />
+    <label>模型 ID</label>
+    <input id="model" placeholder="例如 deepseek-v4-flash；可填写该服务商任意文本模型" />
+    <div class="note">模型列表不写死在插件里；填写服务商文档中的模型 ID 即可。</div>
+    <details class="api-advanced" id="apiAdvanced">
+      <summary>自定义接口（高级）</summary>
+      <div class="api-advanced-body">
+        <label>接口协议</label>
+        <select id="apiProtocol">
+          <option value="openai_chat">OpenAI Chat Completions 兼容</option>
+          <option value="openai_responses">OpenAI Responses</option>
+          <option value="anthropic_messages">Anthropic Messages 原生</option>
+          <option value="gemini_generate_content">Gemini generateContent 原生</option>
+          <option value="azure_openai">Azure OpenAI 完整端点</option>
+        </select>
+        <label>API Base URL / 完整端点</label>
+        <input id="apiBaseUrl" placeholder="https://api.deepseek.com" />
+        <div class="note" id="apiEndpointHint">可填写 Base URL，也可直接填写 /chat/completions 完整地址。</div>
+        <label>认证方式</label>
+        <select id="apiAuthType">
+          <option value="bearer">Bearer Token</option>
+          <option value="x-api-key">x-api-key</option>
+          <option value="api-key">api-key</option>
+          <option value="none">无需认证（本机服务）</option>
+        </select>
+      </div>
+    </details>
+  </section>
+  <section class="section">
+    <div class="section-title">基础规则</div>
+    <div class="section-caption">最低分决定岗位是否达标</div>
+    <label>最低分</label>
+    <input id="minScore" type="number" min="0" max="100" />
+    <div class="note">自动投递时，每个岗位分析完成后，达标就立即沟通并留在当前页；未达标直接继续下一个岗位。</div>
+    <label>参与 AI 分析的简历</label>
+    <div class="check-row profile-choice">
+      <label><input id="profileDefault" type="checkbox" style="width:auto" /> <span>主简历</span></label>
+      <label><input id="profileAltA" type="checkbox" style="width:auto" /> <span>备选简历 A</span></label>
+      <label><input id="profileAltB" type="checkbox" style="width:auto" /> <span>备选简历 B</span></label>
+    </div>
+    <div class="note">可多选。AI 会把已勾选且有文本的简历一起参考，用于覆盖不同岗位方向。</div>
+  </section>
+  <details class="section" open>
+    <summary>求职偏好</summary>
+    <div class="section-body">
+    <label>目标城市/通勤回答</label>
+    <input id="currentLocation" placeholder="例如：北京海淀、广州天河、远程均可" />
+    <label>目标方向/关键词（逗号分隔）</label>
+    <textarea id="targetDirections" placeholder="例如：产品运营,数据分析,市场策划,客户成功"></textarea>
+    <label>额外分析提示词（仅本机配置）</label>
+    <textarea id="customInstructions" placeholder="例如：优先考虑初级/应届友好岗位；不接受销售性质过强的岗位。别人可按自己的求职目标填写。"></textarea>
+    <label>话术风格</label>
+    <textarea id="greetingStyle" placeholder="例如：简洁、真诚，突出匹配经历和到岗意愿。"></textarea>
+    </div>
+  </details>
+  <details class="section">
+    <summary>AI 分析用简历文本</summary>
+    <div class="section-body">
+    <label>主简历</label>
+    <input class="file-input" id="resumeDefaultFile" type="file" accept=".txt,.md,.pdf,application/pdf,text/plain,text/markdown" />
+    <div class="file-picker" id="resumeDefaultFilePicker">
+      <span class="file-status" id="resumeDefaultFileStatus">未导入文件</span>
+      <button class="file-action" type="button" data-file-trigger="resumeDefaultFile">选择文件</button>
+      <button class="file-action file-clear" type="button" data-file-clear="resumeDefault">清除</button>
+    </div>
+    <textarea id="resumeDefault" placeholder="粘贴完整简历文本，供 AI 分析岗位使用。"></textarea>
+    <label>备选简历 A</label>
+    <input class="file-input" id="resumeAltAFile" type="file" accept=".txt,.md,.pdf,application/pdf,text/plain,text/markdown" />
+    <div class="file-picker" id="resumeAltAFilePicker">
+      <span class="file-status" id="resumeAltAFileStatus">未导入文件</span>
+      <button class="file-action" type="button" data-file-trigger="resumeAltAFile">选择文件</button>
+      <button class="file-action file-clear" type="button" data-file-clear="resumeAltA">清除</button>
+    </div>
+    <textarea id="resumeAltA" placeholder="可选。用于另一类岗位或另一版表达。"></textarea>
+    <label>备选简历 B</label>
+    <input class="file-input" id="resumeAltBFile" type="file" accept=".txt,.md,.pdf,application/pdf,text/plain,text/markdown" />
+    <div class="file-picker" id="resumeAltBFilePicker">
+      <span class="file-status" id="resumeAltBFileStatus">未导入文件</span>
+      <button class="file-action" type="button" data-file-trigger="resumeAltBFile">选择文件</button>
+      <button class="file-action file-clear" type="button" data-file-clear="resumeAltB">清除</button>
+    </div>
+    <textarea id="resumeAltB" placeholder="可选。用于第三类岗位或另一版表达。"></textarea>
+    <div class="note">支持 TXT/Markdown/PDF。PDF 会读取可复制文本；扫描件或图片型 PDF 需要先 OCR 或手动复制正文。</div>
+    </div>
+  </details>
+  <section class="section">
+    <div class="section-title">自动化开关</div>
+    <div class="check-row">
+      <label><input id="restrictTargetLocation" type="checkbox" style="width:auto" /> <span>只分析目标城市/地区岗位</span></label>
+      <label><input id="autoRunOnJobsPage" type="checkbox" style="width:auto" /> <span>进入职位列表页后自动分析并启动当前页自动沟通</span></label>
+    </div>
+  </section>
+  <div class="footer">
+    <button id="save">保存</button>
+    <div class="note">配置保存在本机浏览器扩展里；插件不会绕过验证码或安全验证。</div>
+  </div>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

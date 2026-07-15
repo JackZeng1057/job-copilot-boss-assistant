@@ -1,0 +1,520 @@
+#job-copilot-panel {
+  position: fixed;
+  top: 88px;
+  right: auto;
+  bottom: auto;
+  z-index: 2147483647;
+  width: 390px;
+  height: min(560px, calc(100vh - 112px));
+  min-width: 260px;
+  min-height: 180px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow: hidden;
+  resize: none;
+  background: #ffffff;
+  border: 1px solid #e3e8ef;
+  border-radius: 10px;
+  box-shadow: 0 18px 46px rgba(15, 23, 42, .18);
+  color: #172033;
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#job-copilot-panel.jc-minimized {
+  width: 220px;
+  height: auto !important;
+  min-height: auto;
+  overflow: hidden;
+}
+
+#job-copilot-panel.jc-minimized .jc-resize-corner {
+  display: none;
+}
+
+#job-copilot-panel.jc-dragging,
+#job-copilot-panel.jc-resizing {
+  user-select: none;
+}
+
+#job-copilot-launcher {
+  position: fixed;
+  right: 0;
+  bottom: auto;
+  z-index: 2147483647;
+  width: 30px;
+  height: 72px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #2563eb;
+  border-right: 0;
+  border-radius: 14px 0 0 14px;
+  background: #2563eb;
+  color: #fff;
+  box-shadow: -8px 10px 26px rgba(37, 99, 235, .22);
+  cursor: grab;
+  font: 800 15px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  opacity: .88;
+  padding: 0;
+  transition: width .14s ease, opacity .14s ease, box-shadow .14s ease;
+  touch-action: none;
+}
+
+#job-copilot-launcher:hover,
+#job-copilot-launcher:focus-visible {
+  width: 54px;
+  opacity: 1;
+  box-shadow: -10px 12px 30px rgba(37, 99, 235, .28);
+}
+
+#job-copilot-launcher.jc-launcher-dragging {
+  cursor: grabbing;
+  opacity: 1;
+}
+
+#job-copilot-panel * {
+  box-sizing: border-box;
+}
+
+#job-copilot-panel .jc-version {
+  margin-left: 4px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.jc-header {
+  position: relative;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e3e8ef;
+  background: rgba(255, 255, 255, .96);
+  backdrop-filter: blur(10px);
+  font-weight: 700;
+  cursor: move;
+}
+
+.jc-header-actions {
+  position: relative;
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+  cursor: default;
+}
+
+.jc-icon-button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #d9dee7;
+  border-radius: 7px;
+  background: #fff;
+  color: #172033;
+  cursor: pointer;
+  font: 700 18px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.jc-icon-button:hover {
+  border-color: #2563eb;
+  color: #2563eb;
+}
+
+.jc-body {
+  height: calc(100% - 50px);
+  overflow: auto;
+  padding: 10px 12px 12px;
+}
+
+.jc-status-card {
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+
+.jc-status-heading,
+.jc-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.jc-status-label {
+  color: #475467;
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.jc-page-context {
+  color: #172033;
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 3px;
+}
+
+.jc-text-button {
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  padding: 2px 0;
+}
+
+.jc-text-button:hover {
+  text-decoration: underline;
+}
+
+.jc-progress-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  background: #fff;
+  margin: 8px 0 10px;
+  overflow: hidden;
+}
+
+.jc-progress-summary > div {
+  min-width: 0;
+  padding: 7px 5px;
+  border-left: 1px solid #eef2f7;
+  text-align: center;
+}
+
+.jc-progress-summary > div:first-child {
+  border-left: 0;
+}
+
+.jc-progress-summary strong,
+.jc-progress-summary span {
+  display: block;
+}
+
+.jc-progress-summary strong {
+  color: #172033;
+  font-size: 16px;
+  line-height: 1.1;
+}
+
+.jc-progress-summary span {
+  color: #667085;
+  font-size: 10px;
+  margin-top: 2px;
+}
+
+.jc-primary-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 8px 0 10px;
+}
+
+.jc-button {
+  border: 1px solid #2563eb;
+  background: #2563eb;
+  color: #fff;
+  border-radius: 8px;
+  padding: 7px 9px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+  min-height: 34px;
+  white-space: nowrap;
+}
+
+.jc-button.secondary {
+  background: #fff;
+  color: #2563eb;
+  border-color: #b9cdfb;
+}
+
+.jc-button.wide {
+  grid-column: 1 / -1;
+}
+
+#jc-pipeline-control {
+  min-height: 40px;
+}
+
+#jc-pipeline-control:disabled {
+  border-color: #d7dee8;
+  background: #eef2f7;
+  color: #64748b;
+  cursor: default;
+}
+
+.jc-automation-box {
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 10px 0;
+  background: #fbfcfe;
+}
+
+.jc-automation-title {
+  color: #172033;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.jc-control-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 0;
+  border-top: 1px solid #eef2f7;
+}
+
+.jc-control-line:first-of-type {
+  border-top: 0;
+}
+
+.jc-control-line span {
+  display: block;
+  min-width: 0;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.jc-control-line small {
+  display: block;
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.25;
+  margin-top: 1px;
+}
+
+.jc-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 22px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #e2e8f0;
+  cursor: pointer;
+  padding: 0;
+  transition: background .16s ease, border-color .16s ease;
+}
+
+.jc-switch span {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .28);
+  transition: transform .16s ease;
+}
+
+.jc-switch.is-on {
+  border-color: #2563eb;
+  background: #2563eb;
+}
+
+.jc-switch.is-on span {
+  transform: translateX(16px);
+}
+
+.jc-switch:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 2px;
+}
+
+.jc-status {
+  color: #667085;
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.jc-list-heading {
+  color: #344054;
+  font-size: 12px;
+  font-weight: 750;
+  margin: 10px 0 4px;
+}
+
+.jc-job-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 72px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 2px;
+  border-top: 1px solid #eef2f7;
+}
+
+.jc-job-row:first-child {
+  border-top: 0;
+}
+
+.jc-job-index {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.jc-job-content {
+  min-width: 0;
+}
+
+.jc-job-content strong {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #172033;
+  font-size: 12px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.jc-job-meta,
+.jc-job-detail {
+  overflow: hidden;
+  color: #667085;
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jc-job-detail {
+  color: #b54708;
+}
+
+.jc-job-result {
+  display: flex;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.jc-progress-chip {
+  border-radius: 999px;
+  padding: 2px 6px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 10px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.jc-progress-chip.is-active {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.jc-progress-chip.is-success {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.jc-progress-chip.is-warning {
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.jc-progress-chip.is-danger {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.jc-progress-chip.is-muted {
+  background: #f8fafc;
+  color: #94a3b8;
+}
+
+.jc-score {
+  min-height: 12px;
+  color: #475569;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.jc-locate-button {
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  padding: 0;
+}
+
+.jc-locate-button:disabled {
+  color: #cbd5e1;
+  cursor: default;
+}
+
+.jc-retry-button {
+  color: #b42318;
+  font-weight: 750;
+}
+
+.jc-highlight {
+  outline: 2px solid #2563eb !important;
+  outline-offset: 2px !important;
+}
+
+.jc-resize-corner {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  touch-action: none;
+  background: transparent;
+  z-index: 4;
+}
+
+.jc-resize-nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+
+.jc-resize-ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+
+.jc-resize-sw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+
+.jc-resize-se {
+  right: 0;
+  bottom: 0;
+  cursor: nwse-resize;
+}
+
+@media (max-width: 520px) {
+  #job-copilot-panel {
+    left: 8px !important;
+    right: auto !important;
+    width: calc(100vw - 16px) !important;
+    height: min(620px, calc(100vh - 24px)) !important;
+    top: 12px !important;
+  }
+}

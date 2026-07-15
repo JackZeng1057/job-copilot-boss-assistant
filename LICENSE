@@ -1,0 +1,81 @@
+Job Copilot Source-Available Use-Only License 1.0
+
+Copyright (c) 2026 Job Copilot Project Authors. All rights reserved.
+
+1. Permission to use
+
+Subject to this License, the copyright holder grants any person or legal entity
+a non-exclusive, worldwide, royalty-free right to download, install, and run
+unmodified copies of this Software for any lawful purpose. Copies reasonably
+necessary for installation, backup, and use are permitted.
+
+2. Source availability
+
+The source code is provided for transparency, security review, learning, and
+verification of the Software's behavior. Source availability does not grant a
+right to modify or redistribute the Software.
+
+3. Restrictions
+
+Without prior written permission from the copyright holder, you may not:
+
+a. modify, adapt, translate, patch, or create derivative works of the Software;
+b. distribute, publish, sublicense, sell, rent, lease, or otherwise provide the
+   Software or a modified version to any third party;
+c. offer the Software or a modified version as a hosted, managed, or bundled
+   service or product;
+d. remove or alter copyright, license, attribution, or source notices; or
+e. use the Job Copilot name, logo, or other project branding to represent a
+   modified or unrelated product.
+
+Submitting an issue, suggestion, bug report, or documentation correction does
+not transfer ownership and does not grant permission to modify the Software.
+Code contributions may be accepted only under a separate written agreement
+with the copyright holder.
+
+4. Public hosting platforms
+
+A hosting platform may technically permit viewing, copying, or forking a public
+repository under that platform's terms. Such platform functionality does not
+grant permission under this License to modify, publish, or distribute the
+Software outside the rights expressly granted in Section 1.
+
+5. Third-party components
+
+Third-party components included with the Software remain governed by their own
+license terms. In particular, the bundled Mozilla PDF.js files are licensed
+under the Apache License 2.0, as identified in vendor/pdfjs/LICENSE. This License
+does not restrict rights granted directly by a third-party license.
+
+6. No trademark license
+
+No trademark rights are granted. You may refer to the Software by name only as
+reasonably necessary to describe your lawful use of an unmodified copy.
+
+7. Termination
+
+Your rights under this License terminate automatically if you breach any term.
+Upon termination, you must stop using the Software and delete copies in your
+possession or control, except where retention is required by law.
+
+8. Disclaimer of warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. USE OF AUTOMATION ON A
+THIRD-PARTY PLATFORM MAY TRIGGER PLATFORM LIMITS OR ACCOUNT ACTIONS. YOU ARE
+RESPONSIBLE FOR COMPLYING WITH APPLICABLE LAW AND PLATFORM TERMS.
+
+9. Limitation of liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE COPYRIGHT HOLDER AND CONTRIBUTORS
+WILL NOT BE LIABLE FOR ANY CLAIM, DAMAGES, LOSS OF DATA, LOSS OF ACCOUNT,
+BUSINESS INTERRUPTION, OR OTHER LIABILITY ARISING FROM OR RELATED TO THE
+SOFTWARE OR ITS USE.
+
+10. Mandatory legal rights
+
+Nothing in this License limits rights that cannot lawfully be excluded or
+restricted. Any permission not expressly granted is reserved by the copyright
+holder.
+
