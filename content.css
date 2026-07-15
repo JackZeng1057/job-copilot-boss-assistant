@@ -27,7 +27,7 @@
   overflow: hidden;
 }
 
-#job-copilot-panel.jc-minimized .jc-resize-corner {
+#job-copilot-panel.jc-minimized .jc-resize-handle {
   display: none;
 }
 
@@ -476,13 +476,50 @@
   outline-offset: 2px !important;
 }
 
-.jc-resize-corner {
+.jc-resize-handle {
   position: absolute;
-  width: 22px;
-  height: 22px;
   touch-action: none;
   background: transparent;
-  z-index: 4;
+  z-index: 7;
+}
+
+.jc-resize-corner {
+  width: 20px;
+  height: 20px;
+}
+
+.jc-resize-edge.jc-resize-n,
+.jc-resize-edge.jc-resize-s {
+  left: 20px;
+  right: 20px;
+  height: 8px;
+}
+
+.jc-resize-edge.jc-resize-e,
+.jc-resize-edge.jc-resize-w {
+  top: 20px;
+  bottom: 20px;
+  width: 8px;
+}
+
+.jc-resize-n {
+  top: 0;
+  cursor: ns-resize;
+}
+
+.jc-resize-e {
+  right: 0;
+  cursor: ew-resize;
+}
+
+.jc-resize-s {
+  bottom: 0;
+  cursor: ns-resize;
+}
+
+.jc-resize-w {
+  left: 0;
+  cursor: ew-resize;
 }
 
 .jc-resize-nw {

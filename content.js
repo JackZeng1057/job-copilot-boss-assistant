@@ -253,10 +253,14 @@ function initPanel() {
       </div>
       <div id="jc-list"></div>
     </div>
-    <div class="jc-resize-corner jc-resize-nw" data-jc-resize="nw"></div>
-    <div class="jc-resize-corner jc-resize-ne" data-jc-resize="ne"></div>
-    <div class="jc-resize-corner jc-resize-sw" data-jc-resize="sw"></div>
-    <div class="jc-resize-corner jc-resize-se" data-jc-resize="se"></div>
+    <div class="jc-resize-handle jc-resize-edge jc-resize-n" data-jc-resize="n"></div>
+    <div class="jc-resize-handle jc-resize-edge jc-resize-e" data-jc-resize="e"></div>
+    <div class="jc-resize-handle jc-resize-edge jc-resize-s" data-jc-resize="s"></div>
+    <div class="jc-resize-handle jc-resize-edge jc-resize-w" data-jc-resize="w"></div>
+    <div class="jc-resize-handle jc-resize-corner jc-resize-nw" data-jc-resize="nw"></div>
+    <div class="jc-resize-handle jc-resize-corner jc-resize-ne" data-jc-resize="ne"></div>
+    <div class="jc-resize-handle jc-resize-corner jc-resize-sw" data-jc-resize="sw"></div>
+    <div class="jc-resize-handle jc-resize-corner jc-resize-se" data-jc-resize="se"></div>
   `;
   document.documentElement.appendChild(launcher);
   document.documentElement.appendChild(panel);
@@ -685,6 +689,7 @@ function enablePanelResize(panel) {
     panel.style.right = "auto";
     panel.style.bottom = "auto";
     panel.style.maxHeight = "none";
+    handle.setPointerCapture?.(event.pointerId);
 
     const onMove = (moveEvent) => {
       const deltaX = moveEvent.clientX - startX;
@@ -714,14 +719,24 @@ function enablePanelResize(panel) {
       panel.style.width = `${nextWidth}px`;
       panel.style.height = `${nextHeight}px`;
     };
-    const onUp = () => {
+    let finished = false;
+    const finishResize = () => {
+      if (finished) return;
+      finished = true;
       panel.classList.remove("jc-resizing");
       savePanelGeometry(panel);
+      if (handle.hasPointerCapture?.(event.pointerId)) {
+        handle.releasePointerCapture?.(event.pointerId);
+      }
       window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointerup", finishResize);
+      window.removeEventListener("pointercancel", finishResize);
+      handle.removeEventListener("lostpointercapture", finishResize);
     };
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointerup", finishResize);
+    window.addEventListener("pointercancel", finishResize);
+    handle.addEventListener("lostpointercapture", finishResize);
   }));
 }
 
