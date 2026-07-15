@@ -2,7 +2,9 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
-const contentSource = fs.readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8");
+const contentSource = fs
+  .readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8")
+  .replace(/\r\n/g, "\n");
 const classifierSource = contentSource.match(
   /function isTransientAiError\(error\) \{[\s\S]*?\n\}\n\nfunction isExtensionContextError/
 );
