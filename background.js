@@ -284,7 +284,12 @@ async function communicateInIsolatedTab(senderTab, job) {
     await waitForTabComplete(worker.id, ISOLATED_CONTACT_LOAD_TIMEOUT_MS);
     const response = await sendTabMessageWithTimeout(worker.id, {
       type: "performIsolatedCommunication",
-      expectedTitle: String(job?.title || "")
+      expectedJob: {
+        key: String(job?.key || ""),
+        title: String(job?.title || ""),
+        company: String(job?.company || ""),
+        url: workerUrl
+      }
     }, ISOLATED_CONTACT_ACTION_TIMEOUT_MS);
     if (response?.ok) {
       const status = response.status === "chat_route" ? "navigated_chat" : (response.status || "unknown");

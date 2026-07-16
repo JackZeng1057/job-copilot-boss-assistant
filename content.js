@@ -300,7 +300,7 @@ function initPanel() {
   document.getElementById("jc-close").addEventListener("click", () => closePanel(panel, launcher));
   chrome.runtime.onMessage?.addListener((message, _sender, sendResponse) => {
     if (message?.type === "performIsolatedCommunication") {
-      performIsolatedCommunication(message.expectedTitle)
+      performIsolatedCommunication(message.expectedJob || { title: message.expectedTitle })
         .then((status) => sendResponse({ ok: true, status }))
         .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
       return true;
@@ -1380,9 +1380,9 @@ async function contactQualifiedJob(job, context) {
     return "continue";
   }
   if (result === "detail_mismatch") {
-    setJobProgress(job, "detail_mismatch", "右侧详情未能确认目标岗位");
+    setJobProgress(job, "detail_mismatch", "临时标签未能确认目标岗位");
     completeJob(job);
-    setStatus(`未能确认右侧详情已切换到该岗位，未点击沟通：${job.title}。继续处理下一个岗位。`);
+    setStatus(`临时标签未能确认目标岗位，未点击沟通：${job.title}。继续处理下一个岗位。`);
     renderList();
     return "continue";
   }
@@ -1842,7 +1842,12 @@ async function clickCommunicateForJob(job) {
     // tab to chat, but the dedicated jobs tab and its in-memory list never move.
     const result = await sendMessage({
       type: "communicateInIsolatedTab",
-      job: { key: job.key, title: job.jobName || job.title, url: job.url }
+      job: {
+        key: job.key,
+        title: job.jobName || job.title,
+        company: job.company,
+        url: job.url
+      }
     });
     if (!result?.ok) throw new Error(result?.error || "隔离沟通失败");
     if (result.status === "stayed" || result.status === "navigated_chat") {
@@ -1856,14 +1861,19 @@ async function clickCommunicateForJob(job) {
   }
 }
 
-async function performIsolatedCommunication(expectedTitle) {
-  const expected = comparableJobText(expectedTitle);
+async function performIsolatedCommunication(expectedJob) {
+  const expectation = typeof expectedJob === "string" ? { title: expectedJob } : (expectedJob || {});
+  let sawCommunicateButton = false;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const button = findImmediateCommunicateButtons(document).find((node) => isElementVisible(node));
     if (button) {
-      if (expected) {
-        const pageTitle = comparableJobText(document.body?.innerText || "");
-        if (!pageTitle.includes(expected)) throw new Error("临时标签岗位详情与目标岗位不一致");
+      sawCommunicateButton = true;
+      // BOSS may report document complete before its React detail pane finishes
+      // replacing the default job. Keep waiting instead of failing on that
+      // transient pane, and never click while the job identity is uncertain.
+      if (!isolatedJobMatchesExpectation(button, expectation)) {
+        await sleep(100);
+        continue;
       }
       const stayWaiter = createStayOnCurrentPageWaiter(12000);
       try {
@@ -1875,7 +1885,57 @@ async function performIsolatedCommunication(expectedTitle) {
     }
     await sleep(100);
   }
-  return "no_button";
+  return sawCommunicateButton ? "detail_mismatch" : "no_button";
+}
+
+function isolatedJobMatchesExpectation(button, expectedJob) {
+  const detail = findJobDetailScope(button);
+  if (!detail) return false;
+
+  const expectedId = bossJobId(expectedJob?.url) || bossJobId(expectedJob?.key);
+  const currentId = bossJobId(location.href);
+  if (expectedId && currentId && expectedId !== currentId) return false;
+
+  const titleVariants = comparableJobTitleVariants(expectedJob?.title);
+  if (!titleVariants.length) return false;
+  const detailText = comparableJobText(detail.innerText || "");
+  const headingTexts = Array.from(detail.querySelectorAll(
+    "h1,h2,h3,.job-name,.job-title,[class*='job-name'],[class*='job-title'],[class*='name']"
+  )).filter((node) => isElementVisible(node))
+    .map((node) => comparableJobText(node.innerText || node.textContent || ""))
+    .filter(Boolean);
+  const titleMatched = titleVariants.some((title) => detailText.includes(title)
+    || headingTexts.some((heading) => heading.includes(title) || title.includes(heading)));
+  if (!titleMatched) return false;
+
+  // An exact job_detail ID is the strongest boundary. On list-style routes,
+  // require the company too so a similarly named role cannot be contacted.
+  if (expectedId && currentId) return true;
+  const expectedCompany = comparableJobText(expectedJob?.company || "");
+  return !expectedCompany || detailText.includes(expectedCompany);
+}
+
+function bossJobId(value) {
+  const raw = String(value || "");
+  const keyMatch = raw.match(/^job:([^/?#]+)/i);
+  if (keyMatch?.[1]) return keyMatch[1].toLowerCase();
+  try {
+    const url = new URL(raw, "https://www.zhipin.com");
+    const pathMatch = url.pathname.match(/\/job_detail\/([^/?#]+)/i);
+    return pathMatch?.[1]?.toLowerCase() || "";
+  } catch {
+    return "";
+  }
+}
+
+function comparableJobTitleVariants(value) {
+  const raw = stripObfuscatedSalary(String(value || ""));
+  const beforeSuffix = raw.split(/\s*(?:[-—|｜])\s*/)[0];
+  const withoutParenthetical = raw.replace(/[（(][^）)]{1,40}[）)]/g, " ");
+  const candidates = [raw, beforeSuffix, withoutParenthetical,
+    beforeSuffix.replace(/[（(][^）)]{1,40}[）)]/g, " ")];
+  return Array.from(new Set(candidates.map((item) => comparableJobText(item))))
+    .filter((item) => item.length >= 4);
 }
 
 async function selectJobDetail(job) {

@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 const source = fs.readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8");
-const contactStart = source.indexOf("async function performIsolatedCommunication(expectedTitle)");
+const contactStart = source.indexOf("async function performIsolatedCommunication(expectedJob)");
 const waiterStart = source.indexOf("createStayOnCurrentPageWaiter(12000)", contactStart);
 const communicateClick = source.indexOf("clickWithoutNavigation(button)", contactStart);
 const waiterAwait = source.indexOf("await stayWaiter.promise", contactStart);

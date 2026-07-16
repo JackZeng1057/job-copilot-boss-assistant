@@ -32,6 +32,10 @@ const tabs = {
   remove(tabId, callback) { removedTabId = tabId; callback(); },
   sendMessage(_tabId, message, callback) {
     assert.equal(message.type, "performIsolatedCommunication");
+    assert.equal(message.expectedJob.key, "job:example");
+    assert.equal(message.expectedJob.title, "示例岗位");
+    assert.equal(message.expectedJob.company, "示例公司");
+    assert.equal(message.expectedJob.url, "https://www.zhipin.com/job_detail/example.html");
     callback({ ok: true, status: "stayed" });
   }
 };
@@ -53,7 +57,9 @@ new Promise((resolve) => {
     {
       type: "communicateInIsolatedTab",
       job: {
+        key: "job:example",
         title: "示例岗位",
+        company: "示例公司",
         url: "https://www.zhipin.com/job_detail/example.html"
       }
     },
