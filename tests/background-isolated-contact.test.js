@@ -9,6 +9,12 @@ assert.ok(loadTimeout >= 15000, "temporary detail tabs need a realistic load bud
 assert.ok(actionTimeout > 22000, "the outer action timeout must exceed the content script's 10s + 12s budget");
 assert.match(source, /sendTabMessageWithTimeout\([\s\S]*ISOLATED_CONTACT_ACTION_TIMEOUT_MS/,
   "isolated communication must use the longer action timeout");
+const jobsUrlGuard = source.slice(
+  source.indexOf("function isAutomationJobsUrl"),
+  source.indexOf("function createTab", source.indexOf("function isAutomationJobsUrl"))
+);
+assert.doesNotMatch(jobsUrlGuard, /job_detail/,
+  "a detail route must never be treated as the owner jobs page");
 let listener;
 let createdOptions;
 let removedTabId;

@@ -50,7 +50,9 @@ const KNOWN_JOB_CITIES = [
   "长沙", "郑州", "青岛", "厦门", "合肥", "佛山", "东莞", "宁波", "无锡", "珠海", "福州"
 ];
 const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.6.1";
-const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-isolated-contact-v41`;
+const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-isolated-contact-v42`;
+const RUNTIME_PROBE_EVENT = "job-copilot-runtime-probe";
+const RUNTIME_ACK_EVENT = "job-copilot-runtime-ack";
 let pageSyncTimer = null;
 let pageSyncRunning = false;
 let pageSyncRequested = false;
@@ -59,11 +61,34 @@ let sessionPersistTimer = null;
 let manualChatHitbox = null;
 let manualChatOpenAt = 0;
 
-initPanel();
-installManualChatTabHandler();
+const SHOULD_BOOT_CONTENT_RUNTIME = !hasLiveContentRuntime();
+if (SHOULD_BOOT_CONTENT_RUNTIME) {
+  initPanel();
+  installManualChatTabHandler(true);
+  installContentRuntimeResponder();
+}
 
-function installManualChatTabHandler() {
-  if (document.documentElement.dataset.jcManualChatHandler === CONTENT_SCRIPT_VERSION) return;
+function hasLiveContentRuntime() {
+  if (!document.getElementById("job-copilot-panel")) return false;
+  const token = `${CONTENT_SCRIPT_VERSION}:${Date.now()}:${Math.random()}`;
+  let acknowledged = false;
+  const receiveAck = (event) => {
+    if (event.detail === token) acknowledged = true;
+  };
+  document.addEventListener(RUNTIME_ACK_EVENT, receiveAck);
+  document.dispatchEvent(new CustomEvent(RUNTIME_PROBE_EVENT, { detail: token }));
+  document.removeEventListener(RUNTIME_ACK_EVENT, receiveAck);
+  return acknowledged;
+}
+
+function installContentRuntimeResponder() {
+  document.addEventListener(RUNTIME_PROBE_EVENT, (event) => {
+    document.dispatchEvent(new CustomEvent(RUNTIME_ACK_EVENT, { detail: event.detail }));
+  });
+}
+
+function installManualChatTabHandler(force = false) {
+  if (!force && document.documentElement.dataset.jcManualChatHandler === CONTENT_SCRIPT_VERSION) return;
   document.documentElement.dataset.jcManualChatHandler = CONTENT_SCRIPT_VERSION;
   hardenManualChatLinks();
   const linkObserver = new MutationObserver(hardenManualChatLinks);
@@ -198,7 +223,6 @@ function normalizeManualChatLabel(value) {
 
 function initPanel() {
   const existingPanel = document.getElementById("job-copilot-panel");
-  if (existingPanel?.dataset.scriptVersion === CONTENT_SCRIPT_VERSION) return;
   existingPanel?.remove();
   document.getElementById("job-copilot-launcher")?.remove();
   const launcher = document.createElement("button");

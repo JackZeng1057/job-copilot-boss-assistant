@@ -44,8 +44,8 @@ const originalContact = source.slice(
 assert.doesNotMatch(originalContact, /\.click\(|clickWithoutNavigation\(/,
   "the dedicated jobs tab must never click BOSS communication controls");
 const manualChatHandler = source.slice(
-  source.indexOf("function installManualChatTabHandler()"),
-  source.indexOf("function isTrustedTopNavigationChatClick", source.indexOf("function installManualChatTabHandler()"))
+  source.indexOf("function installManualChatTabHandler"),
+  source.indexOf("function isTrustedTopNavigationChatClick", source.indexOf("function installManualChatTabHandler"))
 );
 assert.match(manualChatHandler, /type:\s*["']openManualChatTab["']/,
   "manual chat navigation must be delegated to the background tab API");

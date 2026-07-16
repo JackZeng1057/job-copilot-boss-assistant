@@ -442,7 +442,9 @@ function isAutomationJobsUrl(url) {
   try {
     const parsed = new URL(url);
     if (parsed.hostname !== "www.zhipin.com") return false;
-    return /\/web\/geek\/(?:jobs?|recommend)(?:[/?#]|$)|\/job_detail\//.test(parsed.pathname + parsed.search);
+    // Only list/recommend routes may own an automation session. A job detail
+    // route means the dedicated jobs tab has departed and must be paused.
+    return /\/web\/geek\/(?:jobs?|recommend)(?:[/?#]|$)/.test(parsed.pathname + parsed.search);
   } catch {
     return false;
   }
