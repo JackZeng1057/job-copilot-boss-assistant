@@ -334,7 +334,7 @@ function initPanel() {
       return false;
     }
     if (message?.type !== "automationControl") return false;
-    applyExternalAutomationControl(message.action);
+    applyExternalAutomationControl(message.action, message.reason);
     sendResponse({ ok: true });
     return false;
   });
@@ -426,14 +426,22 @@ async function handleRescanOrFocusAutomationTab() {
   await synchronizePageContext({ force: true, source: "manual" });
 }
 
-function applyExternalAutomationControl(action) {
+function applyExternalAutomationControl(action, reason = "manual") {
   if (!JC_STATE.sessionOwner) return;
   if (action === "pause") {
     JC_STATE.pipeline.allPaused = true;
-    setStatus("已从其他标签暂停自动投递，当前步骤结束后停止。");
+    if (reason === "machine_locked") {
+      setStatus("电脑已锁定，自动投递将在当前步骤结束后暂停。");
+    } else if (reason === "machine_idle") {
+      setStatus("电脑长时间无操作，自动投递将在当前步骤结束后暂停。");
+    } else {
+      setStatus("已从其他标签暂停自动投递，当前步骤结束后停止。");
+    }
   } else if (action === "resume") {
     JC_STATE.pipeline.allPaused = false;
-    setStatus("已从其他标签继续自动投递。");
+    setStatus(reason === "machine_active"
+      ? "电脑恢复使用，自动投递已自动继续。"
+      : "已从其他标签继续自动投递。");
     ensureAnalysisWorker();
   }
   updateAutomationControls();

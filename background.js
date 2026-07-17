@@ -21,6 +21,7 @@ const DEFAULT_SETTINGS = {
 const AUTOMATION_SESSION_KEY = "jobCopilotAutomationSessionV1";
 const AUTOMATION_LOG_KEY = "jobCopilotAutomationLogV1";
 const AUTOMATION_LOG_LIMIT = 200;
+const IDLE_DETECTION_INTERVAL_SECONDS = 60;
 const ISOLATED_CONTACT_LOAD_TIMEOUT_MS = 18000;
 // The content script may spend 10 seconds locating BOSS's button, then up to
 // 18s + 1.2s + 15s on a bounded two-click confirmation flow. Keep the outer
@@ -125,6 +126,16 @@ if (chrome.tabs?.onRemoved) {
   });
 }
 
+if (chrome.idle?.onStateChanged) {
+  chrome.idle.setDetectionInterval(IDLE_DETECTION_INTERVAL_SECONDS);
+  chrome.idle.onStateChanged.addListener((state) => {
+    handleMachineIdleState(state).catch(() => {});
+  });
+  chrome.idle.queryState?.(IDLE_DETECTION_INTERVAL_SECONDS)
+    .then((state) => handleMachineIdleState(state))
+    .catch(() => {});
+}
+
 function storageGet(area, keys) {
   return new Promise((resolve) => area.get(keys, (items) => {
     if (consumeRuntimeLastError()) resolve({});
@@ -175,7 +186,7 @@ function sanitizeAutomationSession(value) {
   const allowed = [
     "tabId", "active", "paused", "mode", "jobsUrl", "fingerprint", "analyses", "progress",
     "summary", "status", "contactInFlight", "currentJobKey", "completedJobKeys",
-    "batchNumber", "batchKeys", "updatedAt"
+    "batchNumber", "batchKeys", "updatedAt", "autoPausedByIdle"
   ];
   for (const key of allowed) {
     if (value[key] !== undefined) safe[key] = value[key];
@@ -416,12 +427,69 @@ function sendTabMessageWithTimeout(tabId, message, timeoutMs) {
 async function controlAutomationTab(action) {
   const session = await getAutomationSession();
   if (!session?.tabId) return false;
+  // A manual command takes ownership of the pause state. The next machine
+  // "active" event must not undo a pause explicitly requested by the user.
+  if (session.autoPausedByIdle) {
+    await saveAutomationSession({
+      ...session,
+      autoPausedByIdle: false,
+      updatedAt: Date.now()
+    });
+  }
+  return sendAutomationControl(session.tabId, action, "manual");
+}
+
+function sendAutomationControl(tabId, action, reason) {
   return new Promise((resolve) => {
-    chrome.tabs.sendMessage(session.tabId, { type: "automationControl", action }, () => {
+    chrome.tabs.sendMessage(tabId, { type: "automationControl", action, reason }, () => {
       const error = consumeRuntimeLastError();
       resolve(!error);
     });
   });
+}
+
+async function handleMachineIdleState(state) {
+  if (!["active", "idle", "locked"].includes(state)) return false;
+  const session = await getAutomationSession();
+  if (!session?.active || !session.tabId) return false;
+
+  if (state === "active") {
+    if (!session.autoPausedByIdle) return false;
+    const resumed = await saveAutomationSession({
+      ...session,
+      paused: false,
+      autoPausedByIdle: false,
+      status: "电脑恢复使用，自动投递正在继续。",
+      updatedAt: Date.now()
+    });
+    await sendAutomationControl(resumed.tabId, "resume", "machine_active");
+    await appendAutomationLog({
+      event: "automation_resumed_after_idle",
+      page: resumed.jobsUrl,
+      detail: "machine_state=active"
+    }, resumed.tabId);
+    return true;
+  }
+
+  // Respect a manual pause. Only runs paused by this handler may be resumed
+  // automatically when the machine becomes active again.
+  if (session.paused || session.autoPausedByIdle) return false;
+  const paused = await saveAutomationSession({
+    ...session,
+    paused: true,
+    autoPausedByIdle: true,
+    status: state === "locked"
+      ? "电脑已锁定，自动投递将在当前步骤结束后暂停。"
+      : "电脑长时间无操作，自动投递将在当前步骤结束后暂停。",
+    updatedAt: Date.now()
+  });
+  await sendAutomationControl(paused.tabId, "pause", `machine_${state}`);
+  await appendAutomationLog({
+    event: "automation_paused_for_idle",
+    page: paused.jobsUrl,
+    detail: `machine_state=${state}`
+  }, paused.tabId);
+  return true;
 }
 
 async function handleAutomationTabNavigation(tabId, url) {
