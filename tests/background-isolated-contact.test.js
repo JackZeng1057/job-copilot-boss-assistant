@@ -10,8 +10,10 @@ assert.ok(actionTimeout > 55000,
   "the outer action timeout must exceed the 10s locate + 18s/1.2s/15s bounded retry budget");
 assert.match(source, /sendTabMessageWithTimeout\([\s\S]*ISOLATED_CONTACT_ACTION_TIMEOUT_MS/,
   "isolated communication must use the longer action timeout");
-assert.match(source, /status === "stay_missing"[\s\S]*waitForTabUrl\(worker\.id, isBossChatUrl, 5000\)[\s\S]*inspectIsolatedCommunicationResult/,
-  "an uncertain native result must get a route check and a final read-only verification");
+assert.match(source, /status === "stay_missing"[\s\S]*verifyIsolatedContactOutcome/,
+  "an uncertain native result must get a final read-only verification");
+assert.match(source, /if \(recoveredStatus\)[\s\S]*isolated_contact_recovered_after_error/,
+  "a lost or timed-out action callback must be verified before it is reported as failed");
 const jobsUrlGuard = source.slice(
   source.indexOf("function isAutomationJobsUrl"),
   source.indexOf("function createTab", source.indexOf("function isAutomationJobsUrl"))

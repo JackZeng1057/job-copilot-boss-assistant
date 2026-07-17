@@ -1,6 +1,6 @@
 # Job Copilot BOSS 助手
 
-当前版本：`0.6.6`
+当前版本：`0.6.7`
 
 Job Copilot 是一个面向求职者的 Chromium 浏览器扩展。它在 BOSS 直聘职位页读取岗位信息，将用户主动配置的求职偏好、简历和完整 JD 交给用户选择的 AI 服务评分，并按用户设置的分数线处理岗位。扩展支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、Gemini generateContent、Azure OpenAI 和常见 OpenAI 兼容接口。
 

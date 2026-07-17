@@ -27,6 +27,7 @@ const ISOLATED_CONTACT_LOAD_TIMEOUT_MS = 18000;
 // 18s + 1.2s + 15s on a bounded two-click confirmation flow. Keep the outer
 // worker budget comfortably above the 44.2s click flow plus the locate phase.
 const ISOLATED_CONTACT_ACTION_TIMEOUT_MS = 65000;
+const ISOLATED_CONTACT_RECOVERY_TIMEOUT_MS = 8000;
 const automationStorage = chrome.storage.session || chrome.storage.local;
 
 function consumeRuntimeLastError() {
@@ -291,6 +292,7 @@ async function communicateInIsolatedTab(senderTab, job) {
     index: Number.isInteger(senderTab.index) ? senderTab.index + 1 : undefined
   });
   if (!worker?.id) throw new Error("无法创建临时沟通标签");
+  await setTabAutoDiscardable(worker.id, false);
 
   await appendAutomationLog({
     event: "isolated_contact_tab_opened",
@@ -298,8 +300,28 @@ async function communicateInIsolatedTab(senderTab, job) {
     page: workerUrl
   }, senderTab.id);
 
+  let stage = "loading";
   try {
-    await waitForTabComplete(worker.id, ISOLATED_CONTACT_LOAD_TIMEOUT_MS);
+    try {
+      await waitForTabComplete(worker.id, ISOLATED_CONTACT_LOAD_TIMEOUT_MS);
+    } catch (loadError) {
+      // Some BOSS detail pages keep the tab loading flag alive even though the
+      // content script and React view are already usable. Probe readiness before
+      // treating the browser-level loading timeout as a real failure.
+      const readiness = await sendTabMessageWithTimeout(worker.id, {
+        type: "inspectIsolatedCommunicationResult"
+      }, 2500);
+      if (!readiness?.ok) throw loadError;
+      if (readiness.confirmed) return { status: "stayed" };
+      if (readiness.status) return { status: readiness.status };
+      await appendAutomationLog({
+        event: "isolated_contact_loaded_via_probe",
+        title: job?.title,
+        page: workerUrl,
+        detail: "tab_status_timeout_but_content_ready"
+      }, senderTab.id);
+    }
+    stage = "action";
     const response = await sendTabMessageWithTimeout(worker.id, {
       type: "performIsolatedCommunication",
       expectedJob: {
@@ -312,26 +334,19 @@ async function communicateInIsolatedTab(senderTab, job) {
     if (response?.ok) {
       const status = response.status === "chat_route" ? "navigated_chat" : (response.status || "unknown");
       if (status === "stay_missing" || status === "unknown") {
-        const current = await waitForTabUrl(worker.id, isBossChatUrl, 5000).catch(() => null);
-        if (isBossChatUrl(current?.url || "")) {
-          await appendAutomationLog({
-            event: "isolated_contact_chat_route_after_wait",
-            title: job?.title,
-            page: current.url,
-            detail: "确认弹窗未及时出现，但临时标签随后进入消息页"
-          }, senderTab.id);
-          return { status: "navigated_chat" };
-        }
-        const verification = await sendTabMessageWithTimeout(worker.id, {
-          type: "inspectIsolatedCommunicationResult"
-        }, 4000);
-        if (verification?.ok && verification.confirmed) {
+        stage = "verification";
+        const recoveredStatus = await verifyIsolatedContactOutcome(
+          worker.id,
+          ISOLATED_CONTACT_RECOVERY_TIMEOUT_MS
+        );
+        if (recoveredStatus) {
           await appendAutomationLog({
             event: "isolated_contact_verified_after_wait",
             title: job?.title,
-            page: workerUrl
+            page: workerUrl,
+            detail: `status=${recoveredStatus}`
           }, senderTab.id);
-          return { status: "stayed" };
+          return { status: recoveredStatus };
         }
       }
       await appendAutomationLog({
@@ -342,38 +357,62 @@ async function communicateInIsolatedTab(senderTab, job) {
       return { status };
     }
 
-    const current = await waitForTabUrl(worker.id, isBossChatUrl, 2000).catch(() => null);
-    if (isBossChatUrl(current?.url || "")) {
+    // A long sendMessage callback can be lost while BOSS is navigating or
+    // replacing its React tree. Perform a fresh read-only inspection before
+    // reporting a timeout; never repeat the communication click here.
+    stage = "timeout_recovery";
+    const recoveredStatus = await verifyIsolatedContactOutcome(
+      worker.id,
+      ISOLATED_CONTACT_RECOVERY_TIMEOUT_MS
+    );
+    if (recoveredStatus) {
       await appendAutomationLog({
-        event: "isolated_contact_chat_route",
+        event: "isolated_contact_recovered_after_error",
         title: job?.title,
-        page: current.url,
-        detail: "原职位标签未导航；临时标签已吸收 BOSS 消息页跳转"
+        page: workerUrl,
+        detail: `error=${String(response?.error || "unknown").slice(0, 120)};status=${recoveredStatus}`
       }, senderTab.id);
-      return { status: "navigated_chat" };
+      return { status: recoveredStatus };
     }
     throw new Error(response?.error || "临时沟通标签未返回结果");
+  } catch (error) {
+    const current = await getTab(worker.id).catch(() => null);
+    await appendAutomationLog({
+      event: "isolated_contact_failed",
+      title: job?.title,
+      page: current?.url || workerUrl,
+      detail: `stage=${stage};error=${String(error?.message || error).slice(0, 180)}`
+    }, senderTab.id);
+    throw error;
   } finally {
+    await setTabAutoDiscardable(worker.id, true);
     await removeTab(worker.id).catch(() => {});
   }
 }
 
-function waitForTabUrl(tabId, predicate, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const deadline = Date.now() + timeoutMs;
-    const check = () => getTab(tabId).then((tab) => {
-      if (predicate(tab?.url || "")) {
-        resolve(tab);
-        return;
-      }
-      if (Date.now() >= deadline) {
-        reject(new Error("临时沟通标签未进入预期页面"));
-        return;
-      }
-      setTimeout(check, 100);
-    }).catch(reject);
-    check();
-  });
+async function verifyIsolatedContactOutcome(tabId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const tab = await getTab(tabId).catch(() => null);
+    const url = tab?.url || "";
+    if (isBossChatUrl(url)) return "navigated_chat";
+    if (/\/web\/passport\/|security|captcha|verify/i.test(url)) return "blocked_security";
+
+    const inspection = await sendTabMessageWithTimeout(tabId, {
+      type: "inspectIsolatedCommunicationResult"
+    }, Math.min(2000, Math.max(500, deadline - Date.now())));
+    if (inspection?.ok) {
+      if (inspection.confirmed) return "stayed";
+      if (inspection.status) return inspection.status;
+    }
+    if (Date.now() >= deadline) break;
+    await delay(400);
+  } while (Date.now() < deadline);
+  return "";
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isolatedContactUrl(value) {

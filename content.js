@@ -49,7 +49,7 @@ const KNOWN_JOB_CITIES = [
   "北京", "上海", "广州", "深圳", "杭州", "南京", "苏州", "成都", "重庆", "武汉", "西安", "天津",
   "长沙", "郑州", "青岛", "厦门", "合肥", "佛山", "东莞", "宁波", "无锡", "珠海", "福州"
 ];
-const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.6.5";
+const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.6.7";
 const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-isolated-contact-v42`;
 const RUNTIME_PROBE_EVENT = "job-copilot-runtime-probe";
 const RUNTIME_ACK_EVENT = "job-copilot-runtime-ack";
@@ -330,7 +330,11 @@ function initPanel() {
       return true;
     }
     if (message?.type === "inspectIsolatedCommunicationResult") {
-      sendResponse({ ok: true, confirmed: hasSuccessfulContactEvidence() || isBossChatUrl(location.href) });
+      sendResponse({
+        ok: true,
+        confirmed: hasSuccessfulContactEvidence() || isBossChatUrl(location.href),
+        status: communicationBlockStatus()
+      });
       return false;
     }
     if (message?.type !== "automationControl") return false;
