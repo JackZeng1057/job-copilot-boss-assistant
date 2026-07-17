@@ -6,9 +6,12 @@ const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/
 const loadTimeout = Number(source.match(/ISOLATED_CONTACT_LOAD_TIMEOUT_MS\s*=\s*(\d+)/)?.[1]);
 const actionTimeout = Number(source.match(/ISOLATED_CONTACT_ACTION_TIMEOUT_MS\s*=\s*(\d+)/)?.[1]);
 assert.ok(loadTimeout >= 15000, "temporary detail tabs need a realistic load budget");
-assert.ok(actionTimeout > 22000, "the outer action timeout must exceed the content script's 10s + 12s budget");
+assert.ok(actionTimeout > 55000,
+  "the outer action timeout must exceed the 10s locate + 18s/1.2s/15s bounded retry budget");
 assert.match(source, /sendTabMessageWithTimeout\([\s\S]*ISOLATED_CONTACT_ACTION_TIMEOUT_MS/,
   "isolated communication must use the longer action timeout");
+assert.match(source, /status === "stay_missing"[\s\S]*waitForTabUrl\(worker\.id, isBossChatUrl, 5000\)[\s\S]*inspectIsolatedCommunicationResult/,
+  "an uncertain native result must get a route check and a final read-only verification");
 const jobsUrlGuard = source.slice(
   source.indexOf("function isAutomationJobsUrl"),
   source.indexOf("function createTab", source.indexOf("function isAutomationJobsUrl"))

@@ -8,35 +8,46 @@ const end = source.indexOf("function isElementVisible(node)", start);
 assert.ok(start >= 0 && end > start, "navigation-safe click helper must exist");
 
 const helperSource = source.slice(start, end);
-const context = {
-  setTimeout(callback) { callback(); }
-};
+const context = {};
 vm.runInNewContext(`${helperSource}\nthis.clickWithoutNavigation = clickWithoutNavigation;`, context);
 
-let href = "https://www.zhipin.com/web/geek/chat";
 let clickCount = 0;
 const anchor = {
-  isConnected: true,
-  getAttribute(name) { return name === "href" ? href : null; },
-  removeAttribute(name) {
-    if (name === "href") href = null;
-  },
-  setAttribute(name, value) {
-    if (name === "href") href = value;
-  }
+  getAttribute(name) { return name === "href" ? "https://www.zhipin.com/web/geek/chat" : null; }
 };
 const node = {
   closest(selector) { return selector === "a[href]" ? anchor : null; },
   click() {
     clickCount += 1;
-    assert.equal(href, null, "native click must run without anchor navigation");
+    assert.equal(anchor.getAttribute("href"), "https://www.zhipin.com/web/geek/chat",
+      "BOSS's native handler must receive the original href");
   }
 };
 
 assert.equal(context.clickWithoutNavigation(node), true);
 assert.equal(clickCount, 1);
-assert.equal(href, "https://www.zhipin.com/web/geek/chat");
-assert.match(source, /async function performIsolatedCommunication[\s\S]*clickWithoutNavigation\(button\)/);
+assert.doesNotMatch(helperSource, /removeAttribute\(["']href["']\)/,
+  "isolated communication must not strip information used by BOSS's click handler");
+
+let prevented = false;
+const javascriptAnchor = {
+  getAttribute(name) { return name === "href" ? "javascript:;" : null; },
+  addEventListener(type, listener, options) {
+    assert.equal(type, "click");
+    assert.equal(options.capture, true);
+    assert.equal(options.once, true);
+    listener({ preventDefault() { prevented = true; } });
+  }
+};
+const javascriptNode = {
+  closest() { return javascriptAnchor; },
+  click() { clickCount += 1; }
+};
+assert.equal(context.clickWithoutNavigation(javascriptNode), true);
+assert.equal(prevented, true, "javascript: URL execution must still be cancelled");
+assert.equal(javascriptAnchor.getAttribute("href"), "javascript:;",
+  "the href must remain visible to BOSS while its listener runs");
+assert.match(source, /async function performIsolatedCommunication[\s\S]*clickWithoutNavigation\(currentButton\)/);
 const originalContact = source.slice(
   source.indexOf("async function clickCommunicateForJob(job)"),
   source.indexOf("async function performIsolatedCommunication", source.indexOf("async function clickCommunicateForJob(job)"))

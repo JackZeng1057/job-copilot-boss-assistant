@@ -54,5 +54,10 @@ assert.match(
   /AI 服务返回内容不完整，已暂停并保留当前岗位/,
   "truncated JSON must show a recoverable status"
 );
+assert.match(
+  contentSource,
+  /const retryOnlyRun = Boolean\(JC_STATE\.retryJobKey\)[\s\S]*if \(retryOnlyRun\) \{[\s\S]*reason: "retry_completed"[\s\S]*自动投递保持暂停/,
+  "retrying one failed job must not silently advance into another batch"
+);
 
 console.log("AI failure recovery tests passed");

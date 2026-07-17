@@ -22,10 +22,10 @@ const AUTOMATION_SESSION_KEY = "jobCopilotAutomationSessionV1";
 const AUTOMATION_LOG_KEY = "jobCopilotAutomationLogV1";
 const AUTOMATION_LOG_LIMIT = 200;
 const ISOLATED_CONTACT_LOAD_TIMEOUT_MS = 18000;
-// The content script may spend up to 10 seconds locating BOSS's button and
-// another 12 seconds waiting for the native success dialog/control. Keep the
-// outer service-worker timeout above that complete action budget.
-const ISOLATED_CONTACT_ACTION_TIMEOUT_MS = 30000;
+// The content script may spend 10 seconds locating BOSS's button, then up to
+// 18s + 1.2s + 15s on a bounded two-click confirmation flow. Keep the outer
+// worker budget comfortably above the 44.2s click flow plus the locate phase.
+const ISOLATED_CONTACT_ACTION_TIMEOUT_MS = 65000;
 const automationStorage = chrome.storage.session || chrome.storage.local;
 
 function consumeRuntimeLastError() {
@@ -57,7 +57,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }).then(async (session) => {
       await setTabAutoDiscardable(tabId, false);
       sendResponse({ ok: true, session });
-    });
+    }).catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
     return true;
   }
   if (message?.type === "updateAutomationSession") {
@@ -67,7 +67,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await setTabAutoDiscardable(sender.tab.id, session.active === false);
         }
         sendResponse({ ok: true, session });
-      });
+      })
+      .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
     return true;
   }
   if (message?.type === "getAutomationSession") {
@@ -75,11 +76,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       ok: true,
       session,
       isOwner: Boolean(session?.tabId && session.tabId === sender.tab?.id)
-    }));
+    })).catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
     return true;
   }
   if (message?.type === "focusAutomationTab") {
-    focusAutomationTab().then((ok) => sendResponse({ ok }));
+    focusAutomationTab()
+      .then((ok) => sendResponse({ ok }))
+      .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
     return true;
   }
   if (message?.type === "openManualChatTab") {
@@ -95,11 +98,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message?.type === "controlAutomationTab") {
-    controlAutomationTab(message.action).then((ok) => sendResponse({ ok }));
+    controlAutomationTab(message.action)
+      .then((ok) => sendResponse({ ok }))
+      .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
     return true;
   }
   if (message?.type === "appendAutomationLog") {
-    appendAutomationLog(message.entry, sender.tab?.id).then(() => sendResponse({ ok: true }));
+    appendAutomationLog(message.entry, sender.tab?.id)
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
     return true;
   }
   return false;
@@ -293,6 +300,29 @@ async function communicateInIsolatedTab(senderTab, job) {
     }, ISOLATED_CONTACT_ACTION_TIMEOUT_MS);
     if (response?.ok) {
       const status = response.status === "chat_route" ? "navigated_chat" : (response.status || "unknown");
+      if (status === "stay_missing" || status === "unknown") {
+        const current = await waitForTabUrl(worker.id, isBossChatUrl, 5000).catch(() => null);
+        if (isBossChatUrl(current?.url || "")) {
+          await appendAutomationLog({
+            event: "isolated_contact_chat_route_after_wait",
+            title: job?.title,
+            page: current.url,
+            detail: "确认弹窗未及时出现，但临时标签随后进入消息页"
+          }, senderTab.id);
+          return { status: "navigated_chat" };
+        }
+        const verification = await sendTabMessageWithTimeout(worker.id, {
+          type: "inspectIsolatedCommunicationResult"
+        }, 4000);
+        if (verification?.ok && verification.confirmed) {
+          await appendAutomationLog({
+            event: "isolated_contact_verified_after_wait",
+            title: job?.title,
+            page: workerUrl
+          }, senderTab.id);
+          return { status: "stayed" };
+        }
+      }
       await appendAutomationLog({
         event: `isolated_contact_${status}`,
         title: job?.title,
@@ -458,14 +488,6 @@ function createTab(options) {
   }));
 }
 
-function duplicateTab(tabId) {
-  return new Promise((resolve, reject) => chrome.tabs.duplicate(tabId, (tab) => {
-    const error = consumeRuntimeLastError();
-    if (error) reject(new Error(error.message));
-    else resolve(tab);
-  }));
-}
-
 function queryTabs(queryInfo) {
   return new Promise((resolve, reject) => chrome.tabs.query(queryInfo, (tabs) => {
     const error = consumeRuntimeLastError();
@@ -535,7 +557,17 @@ async function analyzeJob(payload) {
   const raw = await callAi(settings, prompt, 0.3);
   // The model owns the semantic judgment and final score. Runtime code only
   // validates the response shape and clamps score to the documented 0-100 range.
-  const analysis = normalizeAnalysis(parseJson(raw));
+  let parsed;
+  try {
+    parsed = parseJson(raw);
+  } catch (firstError) {
+    // Spend at most one extra request repairing provider formatting. The
+    // second prompt may fix truncation or structural errors that local control-
+    // character escaping cannot repair.
+    const repairedRaw = await callAi(settings, buildJsonRepairPrompt(raw, firstError), 0);
+    parsed = parseJson(repairedRaw);
+  }
+  const analysis = normalizeAnalysis(parsed);
   return { ok: true, analysis };
 }
 
@@ -915,7 +947,55 @@ function parseJson(text) {
   const start = stripped.indexOf("{");
   const end = stripped.lastIndexOf("}");
   if (start >= 0 && end >= start) stripped = stripped.slice(start, end + 1);
-  return JSON.parse(stripped);
+  try {
+    return JSON.parse(stripped);
+  } catch (error) {
+    // JSON forbids literal control characters inside quoted strings. Some
+    // models still place real newlines or tabs in greeting/reason fields.
+    return JSON.parse(escapeJsonStringControlCharacters(stripped));
+  }
+}
+
+function escapeJsonStringControlCharacters(text) {
+  let output = "";
+  let insideString = false;
+  let escaped = false;
+  for (const char of String(text || "")) {
+    if (escaped) {
+      output += char;
+      escaped = false;
+      continue;
+    }
+    if (insideString && char === "\\") {
+      output += char;
+      escaped = true;
+      continue;
+    }
+    if (char === "\"") {
+      insideString = !insideString;
+      output += char;
+      continue;
+    }
+    if (insideString && char.charCodeAt(0) < 0x20) {
+      if (char === "\n") output += "\\n";
+      else if (char === "\r") output += "\\r";
+      else if (char === "\t") output += "\\t";
+      else output += " ";
+      continue;
+    }
+    output += char;
+  }
+  return output;
+}
+
+function buildJsonRepairPrompt(raw, error) {
+  return `
+请把下面这段模型输出修复成一个严格合法的 JSON 对象。
+只修复 JSON 语法和转义，不改变分数、结论、理由或话术含义；不要输出 Markdown 或解释。
+解析错误：${String(error?.message || error || "JSON 格式错误").slice(0, 300)}
+原始输出：
+${String(raw || "").slice(0, 14000)}
+`.trim();
 }
 
 function normalizeAnalysis(data) {

@@ -49,7 +49,7 @@ const KNOWN_JOB_CITIES = [
   "北京", "上海", "广州", "深圳", "杭州", "南京", "苏州", "成都", "重庆", "武汉", "西安", "天津",
   "长沙", "郑州", "青岛", "厦门", "合肥", "佛山", "东莞", "宁波", "无锡", "珠海", "福州"
 ];
-const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.6.1";
+const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.6.5";
 const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-isolated-contact-v42`;
 const RUNTIME_PROBE_EVENT = "job-copilot-runtime-probe";
 const RUNTIME_ACK_EVENT = "job-copilot-runtime-ack";
@@ -328,6 +328,10 @@ function initPanel() {
         .then((status) => sendResponse({ ok: true, status }))
         .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
       return true;
+    }
+    if (message?.type === "inspectIsolatedCommunicationResult") {
+      sendResponse({ ok: true, confirmed: hasSuccessfulContactEvidence() || isBossChatUrl(location.href) });
+      return false;
     }
     if (message?.type !== "automationControl") return false;
     applyExternalAutomationControl(message.action);
@@ -898,8 +902,19 @@ async function analyzeJobs(options = {}) {
     }
     JC_STATE.pipeline.batchKeys = [];
   }
+  // A list-row retry is a single-job recovery action. Keep this local flag
+  // after retryJobKey is consumed so completing the retry cannot silently
+  // advance into the next batch while the user expects the run to stay paused.
+  const retryOnlyRun = Boolean(JC_STATE.retryJobKey);
   prepareCurrentBatch();
   if (!JC_STATE.jobs.some((job) => jobNeedsProcessing(job))) {
+    if (retryOnlyRun) {
+      JC_STATE.pipeline.allPaused = true;
+      setStatus("重新分析已完成，自动投递保持暂停；需要时可手动继续。");
+      updateAutomationControls();
+      schedulePersistAutomationSession();
+      return { completed: true, reason: "retry_completed", analyzed: 0 };
+    }
     if (JC_STATE.pipeline.mode === "auto" && JC_STATE.pipeline.active) {
       return advanceToNextBatch();
     }
@@ -1059,6 +1074,13 @@ async function analyzeJobs(options = {}) {
   }
 
   if (JC_STATE.analysisRunId === runId) JC_STATE.analyzing = false;
+  if (retryOnlyRun) {
+    JC_STATE.pipeline.allPaused = true;
+    updateAutomationControls();
+    setStatus("重新分析已完成，自动投递保持暂停；需要时可手动继续。");
+    schedulePersistAutomationSession();
+    return { completed: true, reason: "retry_completed", analyzed: analyzedCount };
+  }
   if (JC_STATE.pipeline.mode === "auto" && JC_STATE.pipeline.active) {
     updateAnalysisControls();
     return advanceToNextBatch();
@@ -1418,7 +1440,11 @@ async function contactQualifiedJob(job, context) {
     return "continue";
   }
   const blockingMessage = {
-    stay_missing: "临时沟通标签没有确认到“留在此页”，已停止处理，原职位页保持不动。"
+    stay_missing: "两次沟通点击均未得到 BOSS 确认，已停止处理，原职位页保持不动。",
+    blocked_rate: "BOSS 提示操作频繁，已暂停后续岗位。",
+    blocked_limit: "BOSS 提示沟通数量或额度已达上限，已暂停后续岗位。",
+    blocked_security: "BOSS 要求安全验证，已暂停后续岗位，请先人工完成验证。",
+    blocked_generic: "BOSS 拒绝了本次沟通，已暂停后续岗位。"
   }[result] || "本次沟通状态不明确，已停止处理。";
   setJobProgress(job, "attention", blockingMessage);
   completeJob(job);
@@ -1629,19 +1655,18 @@ function clickWithoutNavigation(node) {
   if (!node) return false;
   const anchor = node.closest?.("a[href]");
   const href = anchor?.getAttribute?.("href") || "";
-  if (!anchor) {
-    node.click();
-    return true;
+  // The click runs in a disposable worker tab, so normal BOSS navigation is
+  // safe there. Keep the href visible to BOSS's delegated handler; removing it
+  // can make some job-detail button variants ignore an otherwise valid click.
+  // Only cancel javascript: URL execution, which Chromium rejects under the
+  // extension page CSP after BOSS's own click handler has already run.
+  if (anchor && /^javascript:/i.test(href)) {
+    anchor.addEventListener("click", (event) => event.preventDefault(), {
+      capture: true,
+      once: true
+    });
   }
-
-  // Preserve BOSS's native listener and an un-cancelled click event while
-  // removing every anchor default for this event cycle. Restoring the href on
-  // the next task keeps later user clicks and accessibility semantics intact.
-  anchor.removeAttribute("href");
   node.click();
-  setTimeout(() => {
-    if (anchor.isConnected && href) anchor.setAttribute("href", href);
-  }, 0);
   return true;
 }
 
@@ -1899,17 +1924,62 @@ async function performIsolatedCommunication(expectedJob) {
         await sleep(100);
         continue;
       }
-      const stayWaiter = createStayOnCurrentPageWaiter(12000);
-      try {
-        clickWithoutNavigation(button);
-        return await stayWaiter.promise;
-      } finally {
-        stayWaiter.cancel();
+      for (let clickAttempt = 0; clickAttempt < 2; clickAttempt += 1) {
+        const currentButton = findImmediateCommunicateButtons(document)
+          .find((node) => isElementVisible(node) && isolatedJobMatchesExpectation(node, expectation));
+        if (!currentButton) {
+          if (hasSuccessfulContactEvidence()) return "stayed";
+          return communicationBlockStatus() || "stay_missing";
+        }
+        currentButton.scrollIntoView?.({ block: "center", inline: "center" });
+        currentButton.focus?.({ preventScroll: true });
+        const stayWaiter = createStayOnCurrentPageWaiter(clickAttempt === 0 ? 18000 : 15000);
+        try {
+          if (clickAttempt === 0) clickWithoutNavigation(currentButton);
+          else dispatchCommunicationRetryClick(currentButton);
+          const result = await stayWaiter.promise;
+          if (result !== "stay_missing") return result;
+        } finally {
+          stayWaiter.cancel();
+        }
+        const blocked = communicationBlockStatus();
+        if (blocked) return blocked;
+        if (hasSuccessfulContactEvidence()) return "stayed";
+        if (clickAttempt === 0) await sleep(1200);
       }
+      return communicationBlockStatus() || "stay_missing";
     }
     await sleep(100);
   }
   return sawCommunicateButton ? "detail_mismatch" : "no_button";
+}
+
+function dispatchCommunicationRetryClick(node) {
+  if (!node) return false;
+  preventJavascriptUrlDefaultOnce(node);
+  const eventOptions = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    view: window,
+    button: 0,
+    buttons: 1
+  };
+  node.dispatchEvent(new MouseEvent("mousedown", eventOptions));
+  node.dispatchEvent(new MouseEvent("mouseup", { ...eventOptions, buttons: 0 }));
+  node.dispatchEvent(new MouseEvent("click", { ...eventOptions, buttons: 0 }));
+  return true;
+}
+
+function communicationBlockStatus() {
+  const text = cleanText(document.body?.innerText || "");
+  if (/安全验证|验证码|拖动滑块|滑块验证|访问异常|账号异常/.test(text)) return "blocked_security";
+  if (/沟通.{0,8}(?:上限|额度|数量)|今日.{0,8}(?:沟通|招呼).{0,8}(?:上限|用完)|已达.{0,8}(?:沟通|招呼)/.test(text)) {
+    return "blocked_limit";
+  }
+  if (/操作频繁|请求频繁|请稍后再试|操作过快|访问过于频繁/.test(text)) return "blocked_rate";
+  if (/沟通失败|发送失败|暂时无法沟通|无法发起沟通/.test(text)) return "blocked_generic";
+  return "";
 }
 
 function isolatedJobMatchesExpectation(button, expectedJob) {
@@ -2151,7 +2221,7 @@ function hasSuccessfulContactEvidence() {
   });
   if (changedControl) return true;
   const pageText = cleanText(document.body?.innerText || "");
-  return /已向BOSS发送消息|消息发送成功|招呼已发送/.test(pageText);
+  return /已向BOSS发送消息|消息发送成功|招呼已发送|已与BOSS沟通|已发起沟通/.test(pageText);
 }
 
 function findStayOnCurrentPageButton() {

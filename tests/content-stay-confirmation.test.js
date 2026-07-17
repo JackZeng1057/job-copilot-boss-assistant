@@ -4,11 +4,17 @@ const vm = require("node:vm");
 
 const source = fs.readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8");
 const contactStart = source.indexOf("async function performIsolatedCommunication(expectedJob)");
-const waiterStart = source.indexOf("createStayOnCurrentPageWaiter(12000)", contactStart);
-const communicateClick = source.indexOf("clickWithoutNavigation(button)", contactStart);
+const waiterStart = source.indexOf("createStayOnCurrentPageWaiter(clickAttempt === 0 ? 18000 : 15000)", contactStart);
+const communicateClick = source.indexOf("clickWithoutNavigation(currentButton)", contactStart);
 const waiterAwait = source.indexOf("await stayWaiter.promise", contactStart);
 assert.ok(contactStart < waiterStart && waiterStart < communicateClick && communicateClick < waiterAwait,
   "the disposable contact tab must observe the native confirmation before clicking");
+const retryClick = source.indexOf("dispatchCommunicationRetryClick(currentButton)", communicateClick);
+assert.ok(retryClick > communicateClick,
+  "a still-unconfirmed immediate-communication button should receive one alternate retry");
+assert.match(source.slice(contactStart, source.indexOf("function isolatedJobMatchesExpectation", contactStart)),
+  /clickAttempt < 2[\s\S]*communicationBlockStatus\(\)[\s\S]*hasSuccessfulContactEvidence\(\)/,
+  "retry must be bounded and stop for platform blocks or late success evidence");
 const start = source.indexOf("function createStayOnCurrentPageWaiter(");
 const end = source.indexOf("function findStayOnCurrentPageButton()", start);
 assert.ok(start >= 0 && end > start, "stay confirmation waiter must exist");
@@ -62,6 +68,14 @@ vm.runInNewContext(`${source.slice(start, end)}\nthis.createStayOnCurrentPageWai
   mutationCallback();
   assert.equal(await changedControlWaiter.promise, "stayed",
     "a changed communication control must confirm a successful send without a dialog");
+
+  availableButton = null;
+  successControls = [];
+  context.document.body.innerText = "已与BOSS沟通";
+  const pageEvidenceWaiter = context.createStayOnCurrentPageWaiter();
+  mutationCallback();
+  assert.equal(await pageEvidenceWaiter.promise, "stayed",
+    "page-level success evidence must confirm a successful send");
 
   console.log("Stay-on-page confirmation regression test passed");
 })().catch((error) => {

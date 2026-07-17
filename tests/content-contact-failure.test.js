@@ -15,5 +15,7 @@ assert.match(handler, /pipeline\.allPaused = true/,
   "an ambiguous communication result must pause later jobs");
 assert.match(handler, /避免重复沟通/,
   "the UI must explain why automatic retry is disabled");
+assert.match(handler, /blocked_rate:[\s\S]*blocked_limit:[\s\S]*blocked_security:/,
+  "platform throttling, quota and security checks must be reported separately");
 
 console.log("Contact failure state regression test passed");
