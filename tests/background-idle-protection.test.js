@@ -83,10 +83,22 @@ function createHarness() {
 
   await harness.changeIdleState("idle");
   let saved = harness.session.values.jobCopilotAutomationSessionV1;
+  assert.equal(saved.paused, false);
+  assert.equal(Boolean(saved.autoPausedByIdle), false);
+  assert.equal(harness.sentControls.length, 0);
+
+  await harness.changeIdleState("active");
+  saved = harness.session.values.jobCopilotAutomationSessionV1;
+  assert.equal(saved.paused, false);
+  assert.equal(Boolean(saved.autoPausedByIdle), false);
+  assert.equal(harness.sentControls.length, 0);
+
+  await harness.changeIdleState("locked");
+  saved = harness.session.values.jobCopilotAutomationSessionV1;
   assert.equal(saved.paused, true);
   assert.equal(saved.autoPausedByIdle, true);
   assert.equal(harness.sentControls.at(-1).action, "pause");
-  assert.equal(harness.sentControls.at(-1).reason, "machine_idle");
+  assert.equal(harness.sentControls.at(-1).reason, "machine_locked");
 
   await harness.changeIdleState("active");
   saved = harness.session.values.jobCopilotAutomationSessionV1;
@@ -103,7 +115,7 @@ function createHarness() {
   await harness.changeIdleState("active");
   assert.equal(harness.sentControls.length, controlsBeforeActive);
 
-  console.log("Machine idle pause and resume tests passed");
+  console.log("Machine lock pause and resume tests passed");
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

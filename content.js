@@ -49,7 +49,7 @@ const KNOWN_JOB_CITIES = [
   "北京", "上海", "广州", "深圳", "杭州", "南京", "苏州", "成都", "重庆", "武汉", "西安", "天津",
   "长沙", "郑州", "青岛", "厦门", "合肥", "佛山", "东莞", "宁波", "无锡", "珠海", "福州"
 ];
-const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.6.7";
+const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.6.8";
 const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-isolated-contact-v42`;
 const RUNTIME_PROBE_EVENT = "job-copilot-runtime-probe";
 const RUNTIME_ACK_EVENT = "job-copilot-runtime-ack";
@@ -436,8 +436,6 @@ function applyExternalAutomationControl(action, reason = "manual") {
     JC_STATE.pipeline.allPaused = true;
     if (reason === "machine_locked") {
       setStatus("电脑已锁定，自动投递将在当前步骤结束后暂停。");
-    } else if (reason === "machine_idle") {
-      setStatus("电脑长时间无操作，自动投递将在当前步骤结束后暂停。");
     } else {
       setStatus("已从其他标签暂停自动投递，当前步骤结束后停止。");
     }
@@ -1325,6 +1323,7 @@ async function advanceToNextBatch() {
     if (!JC_STATE.pipeline.active || JC_STATE.pipeline.allPaused) {
       JC_STATE.pipeline.waitingForNextBatch = false;
       updateAutomationControls();
+      setStatus("连续投递已暂停，批次进度已保留。");
       schedulePersistAutomationSession();
       return { completed: false, reason: "paused" };
     }

@@ -285,7 +285,7 @@ async function communicateInIsolatedTab(senderTab, job) {
   const workerUrl = isolatedContactUrl(job?.url);
   // Never attach an opener to the disposable tab. BOSS scripts running there
   // must have no reference capable of navigating the dedicated jobs tab.
-  const worker = await createTab({
+  const worker = await createTabWithTransientRetry({
     url: workerUrl,
     active: false,
     windowId: senderTab.windowId,
@@ -492,6 +492,11 @@ async function handleMachineIdleState(state) {
   const session = await getAutomationSession();
   if (!session?.active || !session.tabId) return false;
 
+  // chrome.idle reports "idle" after the configured period without physical
+  // keyboard or mouse input. That does not mean the display is off or the
+  // computer is asleep, so watching an automation run must not pause it.
+  if (state === "idle") return false;
+
   if (state === "active") {
     if (!session.autoPausedByIdle) return false;
     const resumed = await saveAutomationSession({
@@ -503,7 +508,7 @@ async function handleMachineIdleState(state) {
     });
     await sendAutomationControl(resumed.tabId, "resume", "machine_active");
     await appendAutomationLog({
-      event: "automation_resumed_after_idle",
+      event: "automation_resumed_after_lock",
       page: resumed.jobsUrl,
       detail: "machine_state=active"
     }, resumed.tabId);
@@ -517,14 +522,12 @@ async function handleMachineIdleState(state) {
     ...session,
     paused: true,
     autoPausedByIdle: true,
-    status: state === "locked"
-      ? "电脑已锁定，自动投递将在当前步骤结束后暂停。"
-      : "电脑长时间无操作，自动投递将在当前步骤结束后暂停。",
+    status: "电脑已锁定，自动投递将在当前步骤结束后暂停。",
     updatedAt: Date.now()
   });
-  await sendAutomationControl(paused.tabId, "pause", `machine_${state}`);
+  await sendAutomationControl(paused.tabId, "pause", "machine_locked");
   await appendAutomationLog({
-    event: "automation_paused_for_idle",
+    event: "automation_paused_for_lock",
     page: paused.jobsUrl,
     detail: `machine_state=${state}`
   }, paused.tabId);
@@ -593,6 +596,22 @@ function createTab(options) {
     if (error) reject(new Error(error.message));
     else resolve(tab);
   }));
+}
+
+async function createTabWithTransientRetry(options, attempts = 3) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await createTab(options);
+    } catch (error) {
+      lastError = error;
+      const transientTabLock = /tabs cannot be edited right now|user may be dragging a tab/i
+        .test(String(error?.message || error || ""));
+      if (!transientTabLock || attempt === attempts - 1) throw error;
+      await delay(250 * (attempt + 1));
+    }
+  }
+  throw lastError;
 }
 
 function queryTabs(queryInfo) {

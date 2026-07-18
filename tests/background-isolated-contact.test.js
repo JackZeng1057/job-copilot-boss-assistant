@@ -23,6 +23,8 @@ assert.doesNotMatch(jobsUrlGuard, /job_detail/,
 let listener;
 let createdOptions;
 let removedTabId;
+let createAttempts = 0;
+let runtimeLastError = null;
 const updateListeners = new Set();
 const storage = {
   get(_keys, callback) { callback({}); },
@@ -36,6 +38,13 @@ const tabs = {
   },
   onRemoved: { addListener() {} },
   create(options, callback) {
+    createAttempts += 1;
+    if (createAttempts === 1) {
+      runtimeLastError = { message: "Tabs cannot be edited right now (user may be dragging a tab)." };
+      callback();
+      runtimeLastError = null;
+      return;
+    }
     createdOptions = options;
     callback({ id: 77, status: "complete", url: options.url });
   },
@@ -52,7 +61,7 @@ const tabs = {
 };
 const runtime = {
   onMessage: { addListener(value) { listener = value; } },
-  get lastError() { return null; }
+  get lastError() { return runtimeLastError; }
 };
 
 vm.runInNewContext(source, {
@@ -81,6 +90,7 @@ new Promise((resolve) => {
 }).then((response) => {
   assert.equal(response.ok, true);
   assert.equal(response.status, "stayed");
+  assert.equal(createAttempts, 2, "a transient Edge tab lock should retry once");
   assert.equal(createdOptions.active, false);
   assert.equal(createdOptions.openerTabId, undefined);
   assert.equal(removedTabId, 77);
