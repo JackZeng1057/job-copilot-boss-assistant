@@ -1,0 +1,36 @@
+name: Release v0.7.0
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event.head_commit.message == '发布0.7.0'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build extension archive
+        run: zip -r Job-Copilot-BOSS-Assistant-v0.7.0.zip . -x '.git/*' '.github/*'
+
+      - name: Create latest release and remove older releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          gh release create v0.7.0 Job-Copilot-BOSS-Assistant-v0.7.0.zip \
+            --title 'Job Copilot v0.7.0' \
+            --notes '修复沟通确认超时误判；插件自动核验未确认结果；单个岗位沟通异常不再中断后续投递。'
+
+          gh api --paginate "repos/${GH_REPO}/releases?per_page=100" \
+            --jq '.[] | select(.tag_name != "v0.7.0") | .id' |
+          while read -r release_id; do
+            [ -n "$release_id" ] && gh api --method DELETE "repos/${GH_REPO}/releases/${release_id}"
+          done
