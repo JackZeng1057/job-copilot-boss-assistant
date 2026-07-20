@@ -41,6 +41,8 @@ const tabs = {
       return;
     }
     assert.equal(message.type, "inspectIsolatedCommunicationResult");
+    assert.equal(message.resolvePendingConfirmation, true,
+      "timeout recovery must resolve the extension's pending native confirmation itself");
     inspectionRequests += 1;
     callback({ ok: true, confirmed: true, status: "" });
   }

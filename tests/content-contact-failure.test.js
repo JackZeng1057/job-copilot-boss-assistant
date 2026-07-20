@@ -11,11 +11,16 @@ assert.match(handler, /try \{[\s\S]*clickCommunicateForJob\(job\)[\s\S]*catch \(
   "communication errors must be handled at the job state boundary");
 assert.match(handler, /setJobProgress\(job, ["']attention["'], detail\)/,
   "an ambiguous communication result must leave an explicit attention state");
-assert.match(handler, /pipeline\.allPaused = true/,
-  "an ambiguous communication result must pause later jobs");
-assert.match(handler, /避免重复沟通/,
-  "the UI must explain why automatic retry is disabled");
+const catchHandler = handler.slice(handler.indexOf("catch (error)"), handler.indexOf("if (JC_STATE.analysisRunId"));
+assert.doesNotMatch(catchHandler, /pipeline\.allPaused = true/,
+  "a job-level communication error must not pause later jobs");
+assert.match(catchHandler, /return ["']continue["']/,
+  "a job-level communication error must continue with the next job");
+assert.match(handler, /result === ["']stay_missing["'][\s\S]*return ["']continue["']/,
+  "an autonomously checked but ambiguous result must continue with the next job");
 assert.match(handler, /blocked_rate:[\s\S]*blocked_limit:[\s\S]*blocked_security:/,
   "platform throttling, quota and security checks must be reported separately");
+assert.match(handler, /blocked_rate:[\s\S]*pipeline\.allPaused = true/,
+  "account-level platform blocks must still pause the pipeline");
 
 console.log("Contact failure state regression test passed");

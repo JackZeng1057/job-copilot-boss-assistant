@@ -69,6 +69,12 @@ vm.runInNewContext(`${source.slice(start, end)}\nthis.createStayOnCurrentPageWai
   assert.equal(await changedControlWaiter.promise, "stayed",
     "a changed communication control must confirm a successful send without a dialog");
 
+  successControls = [{ innerText: "继续聊" }];
+  const alternateControlWaiter = context.createStayOnCurrentPageWaiter();
+  mutationCallback();
+  assert.equal(await alternateControlWaiter.promise, "stayed",
+    "alternate BOSS success wording must confirm a successful send");
+
   availableButton = null;
   successControls = [];
   context.document.body.innerText = "已与BOSS沟通";

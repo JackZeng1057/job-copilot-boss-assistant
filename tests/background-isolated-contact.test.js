@@ -6,12 +6,17 @@ const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/
 const loadTimeout = Number(source.match(/ISOLATED_CONTACT_LOAD_TIMEOUT_MS\s*=\s*(\d+)/)?.[1]);
 const actionTimeout = Number(source.match(/ISOLATED_CONTACT_ACTION_TIMEOUT_MS\s*=\s*(\d+)/)?.[1]);
 assert.ok(loadTimeout >= 15000, "temporary detail tabs need a realistic load budget");
-assert.ok(actionTimeout > 55000,
-  "the outer action timeout must exceed the 10s locate + 18s/1.2s/15s bounded retry budget");
+assert.ok(actionTimeout >= 120000,
+  "inactive disposable tabs need a throttle-tolerant hung-channel guard");
+const recoveryTimeout = Number(source.match(/ISOLATED_CONTACT_RECOVERY_TIMEOUT_MS\s*=\s*(\d+)/)?.[1]);
+assert.ok(recoveryTimeout >= 30000,
+  "lost action callbacks must receive a meaningful autonomous verification window");
 assert.match(source, /sendTabMessageWithTimeout\([\s\S]*ISOLATED_CONTACT_ACTION_TIMEOUT_MS/,
   "isolated communication must use the longer action timeout");
 assert.match(source, /status === "stay_missing"[\s\S]*verifyIsolatedContactOutcome/,
   "an uncertain native result must get a final read-only verification");
+assert.match(source, /inspectIsolatedCommunicationResult"\s*,\s*resolvePendingConfirmation:\s*true/,
+  "recovery must let the extension resolve its own native confirmation dialog");
 assert.match(source, /if \(recoveredStatus\)[\s\S]*isolated_contact_recovered_after_error/,
   "a lost or timed-out action callback must be verified before it is reported as failed");
 const jobsUrlGuard = source.slice(

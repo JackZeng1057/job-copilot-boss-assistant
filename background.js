@@ -23,11 +23,15 @@ const AUTOMATION_LOG_KEY = "jobCopilotAutomationLogV1";
 const AUTOMATION_LOG_LIMIT = 200;
 const IDLE_DETECTION_INTERVAL_SECONDS = 60;
 const ISOLATED_CONTACT_LOAD_TIMEOUT_MS = 18000;
-// The content script may spend 10 seconds locating BOSS's button, then up to
-// 18s + 1.2s + 15s on a bounded two-click confirmation flow. Keep the outer
-// worker budget comfortably above the 44.2s click flow plus the locate phase.
-const ISOLATED_CONTACT_ACTION_TIMEOUT_MS = 65000;
-const ISOLATED_CONTACT_RECOVERY_TIMEOUT_MS = 8000;
+// The content script may spend 10s locating BOSS's button and another 34.2s
+// on its bounded confirmation flow. Inactive disposable tabs can be timer-
+// throttled by Chromium, so that nominal duration is not a reliable wall-clock
+// upper bound. This timeout is
+// only a hung-channel guard; normal confirmation is allowed a wider budget.
+const ISOLATED_CONTACT_ACTION_TIMEOUT_MS = 120000;
+// If the action callback is lost, keep the disposable tab alive and let the
+// extension resolve/check the native confirmation itself before giving up.
+const ISOLATED_CONTACT_RECOVERY_TIMEOUT_MS = 30000;
 const automationStorage = chrome.storage.session || chrome.storage.local;
 
 function consumeRuntimeLastError() {
@@ -309,7 +313,8 @@ async function communicateInIsolatedTab(senderTab, job) {
       // content script and React view are already usable. Probe readiness before
       // treating the browser-level loading timeout as a real failure.
       const readiness = await sendTabMessageWithTimeout(worker.id, {
-        type: "inspectIsolatedCommunicationResult"
+        type: "inspectIsolatedCommunicationResult",
+        resolvePendingConfirmation: true
       }, 2500);
       if (!readiness?.ok) throw loadError;
       if (readiness.confirmed) return { status: "stayed" };
@@ -358,8 +363,9 @@ async function communicateInIsolatedTab(senderTab, job) {
     }
 
     // A long sendMessage callback can be lost while BOSS is navigating or
-    // replacing its React tree. Perform a fresh read-only inspection before
-    // reporting a timeout; never repeat the communication click here.
+    // replacing its React tree. Perform a fresh verification and resolve any
+    // pending stay-on-page confirmation before reporting failure; never repeat
+    // the communication click here.
     stage = "timeout_recovery";
     const recoveredStatus = await verifyIsolatedContactOutcome(
       worker.id,
@@ -399,7 +405,8 @@ async function verifyIsolatedContactOutcome(tabId, timeoutMs) {
     if (/\/web\/passport\/|security|captcha|verify/i.test(url)) return "blocked_security";
 
     const inspection = await sendTabMessageWithTimeout(tabId, {
-      type: "inspectIsolatedCommunicationResult"
+      type: "inspectIsolatedCommunicationResult",
+      resolvePendingConfirmation: true
     }, Math.min(2000, Math.max(500, deadline - Date.now())));
     if (inspection?.ok) {
       if (inspection.confirmed) return "stayed";

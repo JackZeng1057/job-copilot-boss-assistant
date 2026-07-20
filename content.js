@@ -49,7 +49,7 @@ const KNOWN_JOB_CITIES = [
   "北京", "上海", "广州", "深圳", "杭州", "南京", "苏州", "成都", "重庆", "武汉", "西安", "天津",
   "长沙", "郑州", "青岛", "厦门", "合肥", "佛山", "东莞", "宁波", "无锡", "珠海", "福州"
 ];
-const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.6.8";
+const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.7.0";
 const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-isolated-contact-v42`;
 const RUNTIME_PROBE_EVENT = "job-copilot-runtime-probe";
 const RUNTIME_ACK_EVENT = "job-copilot-runtime-ack";
@@ -330,6 +330,18 @@ function initPanel() {
       return true;
     }
     if (message?.type === "inspectIsolatedCommunicationResult") {
+      const pendingConfirmation = message.resolvePendingConfirmation
+        ? findStayOnCurrentPageButton()
+        : null;
+      if (pendingConfirmation) {
+        safeClick(pendingConfirmation);
+        setTimeout(() => sendResponse({
+          ok: true,
+          confirmed: true,
+          status: ""
+        }), 350);
+        return true;
+      }
       sendResponse({
         ok: true,
         confirmed: hasSuccessfulContactEvidence() || isBossChatUrl(location.href),
@@ -1420,10 +1432,9 @@ async function contactQualifiedJob(job, context) {
     const detail = friendlyContactError(error);
     setJobProgress(job, "attention", detail);
     completeJob(job);
-    JC_STATE.pipeline.allPaused = true;
-    setStatus(`${detail} 已暂停后续岗位，避免重复沟通。`);
+    setStatus(`${detail} 已记录当前岗位，继续处理下一个岗位。`);
     renderList();
-    return "halted";
+    return "continue";
   }
   if (JC_STATE.analysisRunId !== context.runId || JC_STATE.page.generation !== context.pageGeneration) {
     return "superseded";
@@ -1450,8 +1461,15 @@ async function contactQualifiedJob(job, context) {
     renderList();
     return "continue";
   }
+  if (result === "stay_missing") {
+    const detail = "插件自动核验后仍未得到 BOSS 明确结果，已记录当前岗位";
+    setJobProgress(job, "attention", detail);
+    completeJob(job);
+    setStatus(`${detail}：${job.title}。继续处理下一个岗位。`);
+    renderList();
+    return "continue";
+  }
   const blockingMessage = {
-    stay_missing: "两次沟通点击均未得到 BOSS 确认，已停止处理，原职位页保持不动。",
     blocked_rate: "BOSS 提示操作频繁，已暂停后续岗位。",
     blocked_limit: "BOSS 提示沟通数量或额度已达上限，已暂停后续岗位。",
     blocked_security: "BOSS 要求安全验证，已暂停后续岗位，请先人工完成验证。",
@@ -2228,11 +2246,11 @@ function hasSuccessfulContactEvidence() {
   const changedControl = controls.some((item) => {
     if (isInsideJobCopilot(item) || !isElementVisible(item)) return false;
     const text = cleanText(item.innerText || item.textContent || "");
-    return text === "继续沟通" || text === "已沟通";
+    return /^(继续沟通|继续聊|已沟通|发消息)$/.test(text);
   });
   if (changedControl) return true;
   const pageText = cleanText(document.body?.innerText || "");
-  return /已向BOSS发送消息|消息发送成功|招呼已发送|已与BOSS沟通|已发起沟通/.test(pageText);
+  return /已向BOSS发送消息|消息发送成功|消息已发送|招呼已发送|已与BOSS沟通|已发起沟通/.test(pageText);
 }
 
 function findStayOnCurrentPageButton() {
@@ -2240,10 +2258,10 @@ function findStayOnCurrentPageButton() {
   return candidates.find((item) => {
     if (!isElementVisible(item)) return false;
     const text = cleanText(item.innerText || item.textContent || "");
-    if (text !== "留在此页") return false;
+    if (!/^(留在此页|留在当前页|暂不进入聊天)$/.test(text)) return false;
     const dialog = item.closest("[role='dialog'], .dialog, .modal, .boss-dialog, [class*='dialog'], [class*='modal']");
     const scopeText = cleanText((dialog || item.parentElement || item).innerText || "");
-    return /已向BOSS发送消息|留在此页/.test(scopeText);
+    return /已向BOSS发送消息|消息已发送|留在此页|留在当前页|暂不进入聊天/.test(scopeText);
   });
 }
 
