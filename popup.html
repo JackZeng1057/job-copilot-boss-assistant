@@ -328,7 +328,7 @@
     <div class="section-caption">最低分决定岗位是否达标</div>
     <label>最低分</label>
     <input id="minScore" type="number" min="0" max="100" />
-    <div class="note">自动投递时，每个岗位分析完成后，达标就立即沟通并留在当前页；未达标直接继续下一个岗位。</div>
+    <div class="note">AI 综合简历、求职配置和完整 JD 给出最终分；达到这里设置的分数且未命中“绝不投递岗位”才会沟通。</div>
     <label>参与 AI 分析的简历</label>
     <div class="check-row profile-choice">
       <label><input id="profileDefault" type="checkbox" style="width:auto" /> <span>主简历</span></label>
@@ -344,6 +344,9 @@
     <input id="currentLocation" placeholder="例如：北京海淀、广州天河、远程均可" />
     <label>目标方向/关键词（逗号分隔）</label>
     <textarea id="targetDirections" placeholder="例如：产品运营,数据分析,市场策划,客户成功"></textarea>
+    <label>绝不投递岗位/职业类型（逗号分隔）</label>
+    <textarea id="excludedDirections" placeholder="例如：电话销售,保险销售,主播,纯客服。请填写职业类型，不要只写“销售”“运营”等过宽词。"></textarea>
+    <div class="note">明确命中这些职业类型的岗位会直接跳过。默认留空，不会把任何人的个人排除项应用给其他用户。</div>
     <label>额外分析提示词（仅本机配置）</label>
     <textarea id="customInstructions" placeholder="例如：优先考虑初级/应届友好岗位；不接受销售性质过强的岗位。别人可按自己的求职目标填写。"></textarea>
     <label>话术风格</label>

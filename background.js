@@ -11,6 +11,7 @@ const DEFAULT_SETTINGS = {
   profile: "default",
   currentLocation: "",
   targetDirections: "",
+  excludedDirections: "",
   customInstructions: "",
   greetingStyle: "简洁、真诚，突出匹配经历和到岗意愿。",
   resumeDefault: "",
@@ -685,11 +686,10 @@ async function analyzeJob(payload) {
     settings,
     customInstructions: payload.customInstructions || buildCustomInstructions(settings),
     targetDirections: payload.targetDirections || settings.targetDirections,
+    excludedDirections: payload.excludedDirections || settings.excludedDirections,
     currentLocation: payload.currentLocation || settings.currentLocation
   });
   const raw = await callAi(settings, prompt, 0.3);
-  // The model owns the semantic judgment and final score. Runtime code only
-  // validates the response shape and clamps score to the documented 0-100 range.
   let parsed;
   try {
     parsed = parseJson(raw);
@@ -726,7 +726,7 @@ function getSettings() {
 function publicRuntimeSettings(settings) {
   const allowed = [
     "minScore", "autoRunOnJobsPage", "restrictTargetLocation", "profile",
-    "currentLocation", "targetDirections", "customInstructions", "greetingStyle"
+    "currentLocation", "targetDirections", "excludedDirections", "customInstructions", "greetingStyle"
   ];
   return Object.fromEntries(allowed.map((key) => [key, settings[key]]));
 }
@@ -741,7 +741,7 @@ function resumeTextForProfile(settings, profile) {
       .map((chunk) => `【${chunk.label}】\n${chunk.text.trim()}`)
       .join("\n\n---\n\n");
   }
-  return settings.resumeDefault || settings.resumeAltA || settings.resumeAltB || "";
+  return "";
 }
 
 function resumeChunkForProfile(settings, profile) {
@@ -971,8 +971,17 @@ function buildCustomInstructions(settings) {
   ].filter(Boolean).join("\n");
 }
 
-function buildAnalysisPrompt({ resumeText, job, settings, customInstructions, targetDirections, currentLocation }) {
+function buildAnalysisPrompt({
+  resumeText,
+  job,
+  settings,
+  customInstructions,
+  targetDirections,
+  excludedDirections,
+  currentLocation
+}) {
   const directions = String(targetDirections || settings.targetDirections || "未配置");
+  const exclusions = String(excludedDirections || settings.excludedDirections || "").trim();
   const locationText = String(currentLocation || settings.currentLocation || "").trim();
   const passScore = Math.max(0, Math.min(100, Number(settings.minScore) || 60));
   const cityRule = settings.restrictTargetLocation && locationText
@@ -986,7 +995,7 @@ function buildAnalysisPrompt({ resumeText, job, settings, customInstructions, ta
 
 核心要求：
 - 不能编造简历中没有的经历、公司、项目、技能熟练度。
-- 你拥有最终评分权。扩展不会按关键词、职位名称、城市正则或固定职业名单二次抬分、压分、封顶或改写结论；因此必须综合全部输入后给出可以直接用于自动投递判断的最终 score。
+- 你拥有最终评分权。扩展只会把 score 限制在 0-100、执行用户明确配置的排除结论，并与用户分数线比较，不会用关键词规则二次抬分。
 - 必须同时参考【前台求职配置】【所有已勾选简历】【岗位完整 JD】【公司与实际工作地点】。不得只看标题或关键词，也不得忽略简历中的可迁移经验。
 - 评分目标是“是否值得投递/沟通”，不是严格技术面试通过率；应届/初级/不限经验岗位可以更宽松。
 - 必须先从简历动态识别用户已有的技能、技术栈、项目、行业知识和可迁移能力，再与完整 JD 对照；不能要求用户把简历里的每项能力重复填写成目标关键词。
@@ -1007,33 +1016,32 @@ function buildAnalysisPrompt({ resumeText, job, settings, customInstructions, ta
 - 对命中关键词的岗位，先默认进入可复核区间，再根据经验年限、学历、地点、职责和简历证据上下调整。
 - 对用户配置的任意方向都要宽召回：只要标题/JD 出现相关信号，且没有明显硬性冲突，通常进入可复核区间。
 
-评分参考：
-- 必须按 100 分拆项制打分，最终 score = 方向相关性 + 简历证据 + 岗位门槛 + 地理位置 + 机会质量。不要只给档位分。
-- 每个小项都可以按证据强弱取整数分，不要只取区间端点；总分必须能拆回以下加分表。
-- 方向相关性 0-30 = 岗位标题/标签命中目标方向 0-10 + JD 核心职责吻合 0-10 + 技能/工具/行业语义相关 0-6 + 多个目标方向或额外提示词吻合 0-4。
-- 简历证据 0-25 = 直接工作/实习/项目经历 0-8 + 作品/项目成果可证明 0-6 + 技能工具证据 0-5 + 学历/课程/证书支撑 0-3 + 可迁移经历表达 0-3。
-- 岗位门槛 0-20 = 经验年限适配 0-5 + 学历要求适配 0-4 + 技能深度适配 0-5 + 初级/应届/不限经验友好度 0-4 + 其他硬性条件满足 0-2。
-- 地理位置 0-10 = 城市/区域匹配 0-4 + 通勤或到岗方式可接受 0-3 + 远程/混合/灵活性 0-2 + 地址信息明确可信 0-1。未开启目标城市硬性过滤时，地点不确定通常只小幅影响。
-- 机会质量 0-15 = 薪资区间合理 0-4 + 职责成长价值 0-5 + 公司/岗位风险较低 0-3 + 沟通优先级 0-3。
-- 单项参考：0 分代表没有证据或明确冲突；满分代表证据直接、明确、强匹配；中间分按证据强度连续给分。
-- 每一分都应由上述拆项累加产生。例如 67 分应能解释成 方向 22 + 简历 15 + 门槛 14 + 地点 6 + 机会 10。
-- ${passScore} 分是当前用户设置的合格线：达到该分数表示值得投递或进入自动沟通候选；不要机械卡在合格线下的固定分数。
-- score 必须是你的最终结论：若 score >= ${passScore}，decision 应为 recommend；低于合格线但值得用户人工查看时用 manual_review；明显不值得投递时用 skip。不要让 decision 与 score 相互矛盾。
-- 90-100：高度匹配，方向、简历证据、岗位门槛、地理位置都很强，优先沟通。
-- 80-89：强匹配，建议积极沟通，只有少量可解释短板。
-- 70-79：较好匹配，方向明确相关，地点现实，经验/学历/职责大体能承接。
-- 60-69：合格可投，命中用户目标方向或有明显可迁移证据，没有硬性冲突。
-- 50-59：仅人工复核，相关性或地点/门槛存在明显不确定，不进入自动沟通。
-- 35-49：弱匹配，除非用户特别想尝试，否则不建议优先投递。
-- 20-34：明显偏离，通常不投。
-- 0-19：硬性不适合，例如经验要求明显过高、职责严重不符、城市/到岗限制不满足。
-- reasons 必须说明分数依据，至少覆盖“方向相关性、简历证据、岗位门槛、公司/岗位地理位置”中的三项，并尽量给出拆项分。
+排除岗位边界：
+- 先概括岗位的主要职业类型，再与【绝不投递岗位/职业类型】逐项进行完整语义比较。
+- 排除列表为空时，excluded 必须为 false。
+- 只有岗位核心工作内容明确属于某个排除职业类型时才能 excluded=true。共享一个宽泛词不算命中，例如“产品运营”不等于“直播运营”，“技术支持”不等于“电话客服”，“市场策划”不等于“电话销售”。
+- 排除项优先级高于目标方向和分数。明确命中时 decision=skip，score 应为 0-19，并写清 exclusion_match 与 exclusion_reason。
+- 未明确命中时 excluded=false，不得因为相似、可能包含少量相关任务或公司行业相近而误排除。
+
+统一评分参考：
+- 最终 score = 方向相关性 0-30 + 简历证据 0-25 + 岗位门槛 0-20 + 地理位置 0-10 + 机会质量 0-15。
+- 方向相关性必须综合岗位职业类型、核心职责和用户目标，不能只看标题。
+- 简历证据必须来自真实工作、实习、项目、技能、作品、课程或可迁移经历。
+- 岗位门槛综合经验、学历、技能深度、应届友好度和明确硬性要求；“高级、资深、5年”等不是自动淘汰词。
+- 地理位置默认只是辅助因素，只有城市硬限制或明确不可接受的到岗要求才可大幅扣分。
+- 与目标方向、简历主线和可迁移能力都基本无关的岗位，即使门槛低，也应低于 50 分，不得为了凑投递量给高分。
+- 信息不足应降低置信度和分数，不能自行补全事实。
+- ${passScore} 分是用户设置的达标线。score >= ${passScore} 且 excluded=false 时 decision=recommend；低于线但值得查看时 manual_review；明显无关或排除岗位用 skip。
+- reasons 至少说明方向、简历证据和岗位门槛三方面的依据。
 
 输出必须是 JSON，不要 Markdown，不要解释 JSON 外的内容。
 JSON 格式：
 {
   "score": 0,
   "decision": "recommend|manual_review|skip",
+  "excluded": false,
+  "exclusion_match": "命中的排除职业类型；未命中时为空",
+  "exclusion_reason": "命中或未命中的语义判断依据",
   "occupation_family": "岗位主要职业类型",
   "target_alignment": "direct|transferable|unrelated|unclear",
   "reasons": ["匹配理由"],
@@ -1046,6 +1054,9 @@ JSON 格式：
 
 【前台求职配置：目标方向】
 ${directions}
+
+【前台求职配置：绝不投递岗位/职业类型】
+${exclusions || "未配置"}
 
 【前台求职配置：额外分析提示词与话术偏好】
 ${customInstructions || "无"}
@@ -1132,17 +1143,21 @@ ${String(raw || "").slice(0, 14000)}
 }
 
 function normalizeAnalysis(data) {
+  const excluded = data?.excluded === true;
   return {
-    score: clampScore(data.score),
-    decision: String(data.decision || "manual_review"),
-    occupation_family: String(data.occupation_family || ""),
-    target_alignment: String(data.target_alignment || "unclear"),
-    reasons: Array.isArray(data.reasons) ? data.reasons : [],
-    risks: Array.isArray(data.risks) ? data.risks : [],
-    resume_tips: Array.isArray(data.resume_tips) ? data.resume_tips : [],
-    location_fit: String(data.location_fit || "unclear"),
-    greeting: String(data.greeting || ""),
-    qa: Array.isArray(data.qa) ? data.qa : []
+    score: excluded ? Math.min(19, clampScore(data?.score)) : clampScore(data?.score),
+    decision: excluded ? "skip" : String(data?.decision || "manual_review"),
+    excluded,
+    exclusion_match: String(data?.exclusion_match || ""),
+    exclusion_reason: String(data?.exclusion_reason || ""),
+    occupation_family: String(data?.occupation_family || ""),
+    target_alignment: String(data?.target_alignment || "unclear"),
+    reasons: Array.isArray(data?.reasons) ? data.reasons : [],
+    risks: Array.isArray(data?.risks) ? data.risks : [],
+    resume_tips: Array.isArray(data?.resume_tips) ? data.resume_tips : [],
+    location_fit: String(data?.location_fit || "unclear"),
+    greeting: String(data?.greeting || ""),
+    qa: Array.isArray(data?.qa) ? data.qa : []
   };
 }
 

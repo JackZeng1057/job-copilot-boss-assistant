@@ -31,6 +31,7 @@ const JC_STATE = {
     profile: "default",
     currentLocation: "",
     targetDirections: "",
+    excludedDirections: "",
     customInstructions: "",
     greetingStyle: "简洁、真诚，突出匹配经历和到岗意愿。"
   },
@@ -49,7 +50,7 @@ const KNOWN_JOB_CITIES = [
   "北京", "上海", "广州", "深圳", "杭州", "南京", "苏州", "成都", "重庆", "武汉", "西安", "天津",
   "长沙", "郑州", "青岛", "厦门", "合肥", "佛山", "东莞", "宁波", "无锡", "珠海", "福州"
 ];
-const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.7.0";
+const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.8.0";
 const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-isolated-contact-v42`;
 const RUNTIME_PROBE_EVENT = "job-copilot-runtime-probe";
 const RUNTIME_ACK_EVENT = "job-copilot-runtime-ack";
@@ -1033,6 +1034,7 @@ async function analyzeJobs(options = {}) {
       resumeProfile: JC_STATE.settings.profile,
       currentLocation: JC_STATE.settings.currentLocation,
       targetDirections: JC_STATE.settings.targetDirections,
+      excludedDirections: JC_STATE.settings.excludedDirections,
       customInstructions: buildCustomInstructions()
     };
     const response = await sendMessage({ type: "analyzeJob", payload });
@@ -1279,6 +1281,7 @@ async function updateContactSession(contactInFlight, job) {
 function isQualifiedJob(job) {
   const analysis = JC_STATE.analyses.get(job.key);
   return Boolean(analysis)
+    && analysis.excluded !== true
     && Number(analysis.score) >= Number(JC_STATE.settings.minScore || 0);
 }
 
@@ -1714,6 +1717,9 @@ function renderList() {
   for (const job of JC_STATE.jobs) {
     const analysis = JC_STATE.analyses.get(job.key);
     const score = analysis?.score ?? "--";
+    const exclusionSummary = analysis?.excluded
+      ? `已排除：${analysis.exclusion_match || analysis.occupation_family || "命中绝不投递岗位"}`
+      : "";
     const progress = progressFor(job);
     const progressInfo = jobProgressInfo(progress.status);
     const meta = [job.company, job.city, job.requirements].filter(Boolean).slice(0, 2).join(" · ");
@@ -1724,6 +1730,7 @@ function renderList() {
       <div class="jc-job-content">
         <strong>${renderTitleHtml(job)}</strong>
         <div class="jc-job-meta">${escapeHtml(meta || "岗位信息待展开")}</div>
+        ${exclusionSummary ? `<div class="jc-audit-summary is-invalid">${escapeHtml(exclusionSummary)}</div>` : ""}
         ${progress.detail ? `<div class="jc-job-detail">${escapeHtml(progress.detail)}</div>` : ""}
       </div>
       <div class="jc-job-result">

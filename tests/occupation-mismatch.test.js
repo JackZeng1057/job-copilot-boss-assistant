@@ -14,6 +14,7 @@ const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/
     profile: ["default"],
     currentLocation: "目标城区",
     targetDirections: "数据标注,平面设计,仓储管理",
+    excludedDirections: "电话销售,保险销售",
     customInstructions: "评分适当放宽，但以岗位工作内容为主。",
     greetingStyle: "简洁",
     resumeDefault: "具备数据整理、视觉设计和库存管理经验。",
@@ -34,18 +35,22 @@ const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/
   const fetch = async (_url, options) => {
     const prompt = JSON.parse(options.body).messages[0].content;
     prompts.push(prompt);
-    const customerServiceTarget = /【我的目标方向】\s*客户服务,电话客服/.test(prompt);
+    const excludedSales = /岗位：电话销售专员/.test(prompt);
+    const directCustomerService = /【前台求职配置：目标方向】\s*客户服务,电话客服/.test(prompt);
     return {
       ok: true,
       text: async () => JSON.stringify({
-      choices: [{ message: { content: JSON.stringify({
-        score: 67,
-        decision: "recommend",
-        occupation_family: "电话客服/客户服务",
-        target_alignment: customerServiceTarget ? "direct" : "unrelated",
-        reasons: ["沟通能力和业务支持具有可迁移性"],
-        location_fit: "acceptable"
-      }) } }]
+        choices: [{ message: { content: JSON.stringify({
+          score: excludedSales ? 75 : directCustomerService ? 72 : 38,
+          decision: excludedSales ? "recommend" : directCustomerService ? "recommend" : "skip",
+          excluded: excludedSales,
+          exclusion_match: excludedSales ? "电话销售" : "",
+          exclusion_reason: excludedSales ? "核心职责是电话推销产品" : "未命中排除职业类型",
+          occupation_family: excludedSales ? "电话销售" : "电话客服/客户服务",
+          target_alignment: directCustomerService ? "direct" : "unrelated",
+          reasons: ["fixture"],
+          location_fit: "acceptable"
+        }) } }]
       })
     };
   };
@@ -59,47 +64,48 @@ const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/
     URL
   });
 
-  const response = await new Promise((resolve) => {
+  const analyze = (title, jd) => new Promise((resolve) => {
     listener({
       type: "analyzeJob",
       payload: {
         platform: "boss",
-        title: "无责底薪 到点下班 不加班",
+        title,
         company: "示例服务公司",
         city: "目标城市",
-        jd: "负责和客户电话沟通，解答客户咨询，处理客户反馈；协助信息记录整理，配合团队完成业务支持工作，确保服务质量。经验不限。",
+        jd,
         jdComplete: true,
         resumeProfile: ["default"]
       }
     }, {}, resolve);
   });
 
-  assert.equal(response.ok, true);
-  assert.equal(response.analysis.score, 67);
-  assert.equal(response.analysis.decision, "recommend");
-  assert.equal(response.analysis.reasons[0], "沟通能力和业务支持具有可迁移性");
-  assert.match(prompts[0], /直接匹配、能力可迁移、无关还是信息不足/);
+  let response = await analyze(
+    "客户服务专员",
+    "负责解答客户咨询、处理客户反馈，不承担销售任务。经验不限。"
+  );
+  assert.equal(response.analysis.score, 38);
+  assert.equal(response.analysis.excluded, false,
+    "customer service must not be excluded merely because telephone sales is excluded");
+
+  response = await analyze(
+    "电话销售专员",
+    "通过电话推销保险产品，完成销售业绩指标。"
+  );
+  assert.equal(response.analysis.excluded, true);
+  assert.equal(response.analysis.score, 19, "excluded jobs must be capped below the passing range");
+  assert.equal(response.analysis.decision, "skip");
+  assert.equal(response.analysis.exclusion_match, "电话销售");
 
   settings.targetDirections = "客户服务,电话客服";
-  settings.resumeDefault = "具备客户咨询处理和电话客服经验。";
-  const customerServiceResponse = await new Promise((resolve) => {
-    listener({
-      type: "analyzeJob",
-      payload: {
-        platform: "boss",
-        title: "客户服务专员",
-        company: "示例服务公司",
-        city: "目标城市",
-        jd: "负责和客户电话沟通，解答客户咨询，处理客户反馈，确保服务质量。经验不限。",
-        jdComplete: true,
-        resumeProfile: ["default"]
-      }
-    }, {}, resolve);
-  });
-  assert.equal(customerServiceResponse.ok, true);
-  assert.ok(customerServiceResponse.analysis.score >= 60);
-  assert.equal(customerServiceResponse.analysis.decision, "recommend");
-  console.log("AI occupation judgment passthrough test passed");
+  response = await analyze(
+    "客户服务专员",
+    "负责解答客户咨询、处理客户反馈，不承担销售任务。经验不限。"
+  );
+  assert.equal(response.analysis.score, 72);
+  assert.equal(response.analysis.decision, "recommend");
+  assert.match(prompts[0], /共享一个宽泛词不算命中/);
+
+  console.log("occupation exclusion boundary tests passed");
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

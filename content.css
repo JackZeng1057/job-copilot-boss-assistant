@@ -401,6 +401,28 @@
   color: #b54708;
 }
 
+.jc-score-breakdown {
+  margin-top: 3px;
+  color: #475569;
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.jc-audit-summary {
+  margin-top: 2px;
+  color: #047857;
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.jc-audit-summary.is-incomplete {
+  color: #b45309;
+}
+
+.jc-audit-summary.is-invalid {
+  color: #b91c1c;
+}
+
 .jc-job-result {
   display: flex;
   align-items: flex-end;

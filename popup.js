@@ -15,6 +15,7 @@ const fields = {
   profileAltB: document.getElementById("profileAltB"),
   currentLocation: document.getElementById("currentLocation"),
   targetDirections: document.getElementById("targetDirections"),
+  excludedDirections: document.getElementById("excludedDirections"),
   customInstructions: document.getElementById("customInstructions"),
   greetingStyle: document.getElementById("greetingStyle"),
   resumeDefault: document.getElementById("resumeDefault"),
@@ -50,6 +51,7 @@ const defaults = {
   profile: "default",
   currentLocation: "",
   targetDirections: "",
+  excludedDirections: "",
   customInstructions: "",
   greetingStyle: "简洁、真诚，突出匹配经历和到岗意愿。",
   resumeDefault: "",
@@ -78,6 +80,7 @@ chrome.storage.local.get(
     setSelectedProfiles(stored.profile);
     fields.currentLocation.value = stored.currentLocation;
     fields.targetDirections.value = stored.targetDirections;
+    fields.excludedDirections.value = stored.excludedDirections;
     fields.customInstructions.value = stored.customInstructions;
     fields.greetingStyle.value = stored.greetingStyle;
     fields.resumeDefault.value = stored.resumeDefault;
@@ -144,6 +147,7 @@ document.getElementById("save").addEventListener("click", async () => {
     profile: selectedProfiles(),
     currentLocation: fields.currentLocation.value.trim(),
     targetDirections: fields.targetDirections.value.trim(),
+    excludedDirections: fields.excludedDirections.value.trim(),
     customInstructions: fields.customInstructions.value.trim(),
     greetingStyle: fields.greetingStyle.value.trim(),
     resumeDefault: fields.resumeDefault.value.trim(),
