@@ -27,7 +27,7 @@ const node = {
 assert.equal(context.clickWithoutNavigation(node), true);
 assert.equal(clickCount, 1);
 assert.doesNotMatch(helperSource, /removeAttribute\(["']href["']\)/,
-  "isolated communication must not strip information used by BOSS's click handler");
+  "communication must not strip information used by BOSS's click handler");
 
 let prevented = false;
 const javascriptAnchor = {
@@ -47,13 +47,16 @@ assert.equal(context.clickWithoutNavigation(javascriptNode), true);
 assert.equal(prevented, true, "javascript: URL execution must still be cancelled");
 assert.equal(javascriptAnchor.getAttribute("href"), "javascript:;",
   "the href must remain visible to BOSS while its listener runs");
-assert.match(source, /async function performIsolatedCommunication[\s\S]*clickWithoutNavigation\(currentButton\)/);
 const originalContact = source.slice(
   source.indexOf("async function clickCommunicateForJob(job)"),
-  source.indexOf("async function performIsolatedCommunication", source.indexOf("async function clickCommunicateForJob(job)"))
+  source.indexOf("function communicationBlockStatus", source.indexOf("async function clickCommunicateForJob(job)"))
 );
-assert.doesNotMatch(originalContact, /\.click\(|clickWithoutNavigation\(/,
-  "the dedicated jobs tab must never click BOSS communication controls");
+assert.match(originalContact, /findCommunicationButtonForJob\(job\)/,
+  "the current job detail must provide the communication control");
+assert.match(originalContact, /clickWithoutNavigation\(button\)/,
+  "the current jobs tab should click the native communication control");
+assert.doesNotMatch(originalContact, /communicateInIsolatedTab|createTab|dispatchCommunicationRetryClick/,
+  "automatic communication must not create a worker tab or retry the click");
 const manualChatHandler = source.slice(
   source.indexOf("function installManualChatTabHandler"),
   source.indexOf("function isTrustedTopNavigationChatClick", source.indexOf("function installManualChatTabHandler"))
@@ -81,4 +84,4 @@ assert.match(source, /job-copilot-message-overlay[\s\S]*stopImmediatePropagation
 assert.match(source, /addEventListener\(["']pointerdown["'],\s*handleManualChatHitboxEvent,\s*true\)/,
   "the message hitbox must intercept pointer input before the BOSS route handler");
 assert.doesNotMatch(source, /clickWithoutJavascriptUrl/);
-console.log("Isolated content navigation regression test passed");
+console.log("Current-page content navigation regression test passed");

@@ -13,7 +13,6 @@ for (const type of [
   "getAutomationSession",
   "focusAutomationTab",
   "openManualChatTab",
-  "communicateInIsolatedTab",
   "controlAutomationTab",
   "appendAutomationLog"
 ]) {

@@ -50,8 +50,8 @@ const KNOWN_JOB_CITIES = [
   "北京", "上海", "广州", "深圳", "杭州", "南京", "苏州", "成都", "重庆", "武汉", "西安", "天津",
   "长沙", "郑州", "青岛", "厦门", "合肥", "佛山", "东莞", "宁波", "无锡", "珠海", "福州"
 ];
-const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.8.0";
-const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-isolated-contact-v42`;
+const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.8.1";
+const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-current-page-contact-v1`;
 const RUNTIME_PROBE_EVENT = "job-copilot-runtime-probe";
 const RUNTIME_ACK_EVENT = "job-copilot-runtime-ack";
 let pageSyncTimer = null;
@@ -324,32 +324,6 @@ function initPanel() {
   });
   document.getElementById("jc-close").addEventListener("click", () => closePanel(panel, launcher));
   chrome.runtime.onMessage?.addListener((message, _sender, sendResponse) => {
-    if (message?.type === "performIsolatedCommunication") {
-      performIsolatedCommunication(message.expectedJob || { title: message.expectedTitle })
-        .then((status) => sendResponse({ ok: true, status }))
-        .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
-      return true;
-    }
-    if (message?.type === "inspectIsolatedCommunicationResult") {
-      const pendingConfirmation = message.resolvePendingConfirmation
-        ? findStayOnCurrentPageButton()
-        : null;
-      if (pendingConfirmation) {
-        safeClick(pendingConfirmation);
-        setTimeout(() => sendResponse({
-          ok: true,
-          confirmed: true,
-          status: ""
-        }), 350);
-        return true;
-      }
-      sendResponse({
-        ok: true,
-        confirmed: hasSuccessfulContactEvidence() || isBossChatUrl(location.href),
-        status: communicationBlockStatus()
-      });
-      return false;
-    }
     if (message?.type !== "automationControl") return false;
     applyExternalAutomationControl(message.action, message.reason);
     sendResponse({ ok: true });
@@ -1188,7 +1162,7 @@ async function startAutoPipeline(options = {}) {
       ? `AI 会把目标城市/地区作为硬性偏好，并仅沟通最终分达到 ${JC_STATE.settings.minScore} 分的岗位`
       : `AI 会综合岗位实际地点，并仅沟通最终分达到 ${JC_STATE.settings.minScore} 分的岗位`;
     const ok = window.confirm(
-      `确认开始连续自动投递？\n\n${locationRule}。每批最多 ${JOB_BATCH_SIZE} 个岗位；岗位达标后等待约 ${Math.round(POST_ANALYSIS_CONTACT_DELAY_MS / 1000)} 秒，再点击“立即沟通”和“留在此页”；每个岗位结束后等待约 ${Math.round(BETWEEN_JOBS_DELAY_MS / 1000)} 秒，每批结束后等待 ${Math.round(BETWEEN_BATCHES_DELAY_MS / 1000)} 秒再加载后续岗位。插件不会主动进入消息页。`
+      `确认开始连续自动投递？\n\n${locationRule}。每批最多 ${JOB_BATCH_SIZE} 个岗位；岗位达标后等待约 ${Math.round(POST_ANALYSIS_CONTACT_DELAY_MS / 1000)} 秒，在当前职位页点击一次“立即沟通”或“继续沟通”，并优先选择“留在此页”；若 BOSS 仍跳到消息页，插件会返回原职位列表。每个岗位结束后等待约 ${Math.round(BETWEEN_JOBS_DELAY_MS / 1000)} 秒，每批结束后等待 ${Math.round(BETWEEN_BATCHES_DELAY_MS / 1000)} 秒再加载后续岗位。`
     );
     if (!ok) return false;
   }
@@ -1271,10 +1245,11 @@ async function updateContactSession(contactInFlight, job) {
   JC_STATE.currentJobKey = contactInFlight ? String(job?.key || "") : "";
   await sendMessage({
     type: "updateAutomationSession",
-    patch: buildAutomationSessionPayload({
+    patch: {
       contactInFlight,
-      currentJobKey: JC_STATE.currentJobKey
-    })
+      currentJobKey: JC_STATE.currentJobKey,
+      updatedAt: Date.now()
+    }
   });
 }
 
@@ -1426,7 +1401,7 @@ async function contactQualifiedJob(job, context) {
   const pacingResult = await waitForPacingDelay(POST_ANALYSIS_CONTACT_DELAY_MS, context);
   if (pacingResult !== "ready") return pacingResult;
   setJobProgress(job, "contacting");
-  setStatus(`分数达标，正在立即沟通：${job.title}`);
+  setStatus(`分数达标，正在点击沟通按钮：${job.title}`);
   renderList();
   let result;
   try {
@@ -1443,24 +1418,26 @@ async function contactQualifiedJob(job, context) {
     return "superseded";
   }
 
-  if (result === "stayed") {
+  if (result === "stayed" || result === "navigated_chat") {
     setJobProgress(job, "contacted");
     completeJob(job);
-    setStatus(`已沟通并留在当前页：${job.title}。${Math.round(BETWEEN_JOBS_DELAY_MS / 1000)} 秒后继续下一个岗位。`);
+    setStatus(result === "navigated_chat"
+      ? `已点击沟通，正在返回原职位列表：${job.title}。`
+      : `已点击沟通并留在当前页：${job.title}。${Math.round(BETWEEN_JOBS_DELAY_MS / 1000)} 秒后继续下一个岗位。`);
     renderList();
     return "continue";
   }
   if (result === "detail_mismatch") {
-    setJobProgress(job, "detail_mismatch", "临时标签未能确认目标岗位");
+    setJobProgress(job, "detail_mismatch", "当前职位详情与目标岗位不一致");
     completeJob(job);
-    setStatus(`临时标签未能确认目标岗位，未点击沟通：${job.title}。继续处理下一个岗位。`);
+    setStatus(`当前职位详情与目标岗位不一致，未点击沟通：${job.title}。继续处理下一个岗位。`);
     renderList();
     return "continue";
   }
   if (result === "no_button") {
-    setJobProgress(job, "unavailable", "没有“立即沟通”按钮");
+    setJobProgress(job, "unavailable", "没有可点击的沟通按钮");
     completeJob(job);
-    setStatus(`该岗位没有“立即沟通”按钮：${job.title}。继续处理下一个岗位。`);
+    setStatus(`该岗位没有“立即沟通”或“继续沟通”按钮：${job.title}。继续处理下一个岗位。`);
     renderList();
     return "continue";
   }
@@ -1663,7 +1640,7 @@ function isJobsPage() {
   const url = location.href;
   if (isBossChatUrl(url)) return false;
   if (/\/web\/geek\/job|\/web\/geek\/recommend|query=/.test(url)) return true;
-  return findCards().length > 0 || /推荐|职位|立即沟通/.test(cleanText(document.body?.innerText || "").slice(0, 2000));
+  return findCards().length > 0 || /推荐|职位|立即沟通|继续沟通/.test(cleanText(document.body?.innerText || "").slice(0, 2000));
 }
 
 function preventJavascriptUrlDefaultOnce(node) {
@@ -1687,9 +1664,8 @@ function clickWithoutNavigation(node) {
   if (!node) return false;
   const anchor = node.closest?.("a[href]");
   const href = anchor?.getAttribute?.("href") || "";
-  // The click runs in a disposable worker tab, so normal BOSS navigation is
-  // safe there. Keep the href visible to BOSS's delegated handler; removing it
-  // can make some job-detail button variants ignore an otherwise valid click.
+  // Keep the href visible to BOSS's delegated handler; removing it can make
+  // some job-detail button variants ignore an otherwise valid click.
   // Only cancel javascript: URL execution, which Chromium rejects under the
   // extension page CSP after BOSS's own click handler has already run.
   if (anchor && /^javascript:/i.test(href)) {
@@ -1923,88 +1899,37 @@ function focusJob(key) {
 async function clickCommunicateForJob(job) {
   await updateContactSession(true, job);
   try {
-    // Communication runs in a disposable inactive tab. BOSS may navigate that
-    // tab to chat, but the dedicated jobs tab and its in-memory list never move.
-    const result = await sendMessage({
-      type: "communicateInIsolatedTab",
-      job: {
-        key: job.key,
-        title: job.jobName || job.title,
-        company: job.company,
-        url: job.url
-      }
-    });
-    if (!result?.ok) throw new Error(result?.error || "隔离沟通失败");
-    if (result.status === "stayed" || result.status === "navigated_chat") {
-      logContactEvent(`isolated_${result.status}`, job);
-      return "stayed";
+    const selected = await selectJobDetail(job);
+    if (!selected) return "detail_mismatch";
+    const button = findCommunicationButtonForJob(job);
+    if (!button) return "no_button";
+
+    const label = cleanText(button.innerText || button.textContent || "");
+    button.scrollIntoView?.({ block: "center", inline: "center" });
+    button.focus?.({ preventScroll: true });
+
+    if (/^(继续沟通|继续聊)$/.test(label)) {
+      clickWithoutNavigation(button);
+      logContactEvent("existing_conversation_clicked", job);
+      await sleep(250);
+      return isBossChatUrl(location.href) ? "navigated_chat" : "stayed";
     }
-    logContactEvent(`isolated_${result.status || "unknown"}`, job);
-    return result.status || "stay_missing";
+
+    const stayWaiter = createStayOnCurrentPageWaiter(6000);
+    try {
+      clickWithoutNavigation(button);
+      const result = await stayWaiter.promise;
+      const finalResult = result === "stay_missing" ? (communicationBlockStatus() || result) : result;
+      logContactEvent(`current_page_${finalResult}`, job);
+      return finalResult === "chat_route" ? "navigated_chat" : finalResult;
+    } finally {
+      stayWaiter.cancel();
+    }
   } finally {
-    await updateContactSession(false, job).catch(() => {});
-  }
-}
-
-async function performIsolatedCommunication(expectedJob) {
-  const expectation = typeof expectedJob === "string" ? { title: expectedJob } : (expectedJob || {});
-  let sawCommunicateButton = false;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const button = findImmediateCommunicateButtons(document).find((node) => isElementVisible(node));
-    if (button) {
-      sawCommunicateButton = true;
-      // BOSS may report document complete before its React detail pane finishes
-      // replacing the default job. Keep waiting instead of failing on that
-      // transient pane, and never click while the job identity is uncertain.
-      if (!isolatedJobMatchesExpectation(button, expectation)) {
-        await sleep(100);
-        continue;
-      }
-      for (let clickAttempt = 0; clickAttempt < 2; clickAttempt += 1) {
-        const currentButton = findImmediateCommunicateButtons(document)
-          .find((node) => isElementVisible(node) && isolatedJobMatchesExpectation(node, expectation));
-        if (!currentButton) {
-          if (hasSuccessfulContactEvidence()) return "stayed";
-          return communicationBlockStatus() || "stay_missing";
-        }
-        currentButton.scrollIntoView?.({ block: "center", inline: "center" });
-        currentButton.focus?.({ preventScroll: true });
-        const stayWaiter = createStayOnCurrentPageWaiter(clickAttempt === 0 ? 18000 : 15000);
-        try {
-          if (clickAttempt === 0) clickWithoutNavigation(currentButton);
-          else dispatchCommunicationRetryClick(currentButton);
-          const result = await stayWaiter.promise;
-          if (result !== "stay_missing") return result;
-        } finally {
-          stayWaiter.cancel();
-        }
-        const blocked = communicationBlockStatus();
-        if (blocked) return blocked;
-        if (hasSuccessfulContactEvidence()) return "stayed";
-        if (clickAttempt === 0) await sleep(1200);
-      }
-      return communicationBlockStatus() || "stay_missing";
+    if (!isBossChatUrl(location.href)) {
+      await updateContactSession(false, job).catch(() => {});
     }
-    await sleep(100);
   }
-  return sawCommunicateButton ? "detail_mismatch" : "no_button";
-}
-
-function dispatchCommunicationRetryClick(node) {
-  if (!node) return false;
-  preventJavascriptUrlDefaultOnce(node);
-  const eventOptions = {
-    bubbles: true,
-    cancelable: true,
-    composed: true,
-    view: window,
-    button: 0,
-    buttons: 1
-  };
-  node.dispatchEvent(new MouseEvent("mousedown", eventOptions));
-  node.dispatchEvent(new MouseEvent("mouseup", { ...eventOptions, buttons: 0 }));
-  node.dispatchEvent(new MouseEvent("click", { ...eventOptions, buttons: 0 }));
-  return true;
 }
 
 function communicationBlockStatus() {
@@ -2016,56 +1941,6 @@ function communicationBlockStatus() {
   if (/操作频繁|请求频繁|请稍后再试|操作过快|访问过于频繁/.test(text)) return "blocked_rate";
   if (/沟通失败|发送失败|暂时无法沟通|无法发起沟通/.test(text)) return "blocked_generic";
   return "";
-}
-
-function isolatedJobMatchesExpectation(button, expectedJob) {
-  const detail = findJobDetailScope(button);
-  if (!detail) return false;
-
-  const expectedId = bossJobId(expectedJob?.url) || bossJobId(expectedJob?.key);
-  const currentId = bossJobId(location.href);
-  if (expectedId && currentId && expectedId !== currentId) return false;
-
-  const titleVariants = comparableJobTitleVariants(expectedJob?.title);
-  if (!titleVariants.length) return false;
-  const detailText = comparableJobText(detail.innerText || "");
-  const headingTexts = Array.from(detail.querySelectorAll(
-    "h1,h2,h3,.job-name,.job-title,[class*='job-name'],[class*='job-title'],[class*='name']"
-  )).filter((node) => isElementVisible(node))
-    .map((node) => comparableJobText(node.innerText || node.textContent || ""))
-    .filter(Boolean);
-  const titleMatched = titleVariants.some((title) => detailText.includes(title)
-    || headingTexts.some((heading) => heading.includes(title) || title.includes(heading)));
-  if (!titleMatched) return false;
-
-  // An exact job_detail ID is the strongest boundary. On list-style routes,
-  // require the company too so a similarly named role cannot be contacted.
-  if (expectedId && currentId) return true;
-  const expectedCompany = comparableJobText(expectedJob?.company || "");
-  return !expectedCompany || detailText.includes(expectedCompany);
-}
-
-function bossJobId(value) {
-  const raw = String(value || "");
-  const keyMatch = raw.match(/^job:([^/?#]+)/i);
-  if (keyMatch?.[1]) return keyMatch[1].toLowerCase();
-  try {
-    const url = new URL(raw, "https://www.zhipin.com");
-    const pathMatch = url.pathname.match(/\/job_detail\/([^/?#]+)/i);
-    return pathMatch?.[1]?.toLowerCase() || "";
-  } catch {
-    return "";
-  }
-}
-
-function comparableJobTitleVariants(value) {
-  const raw = stripObfuscatedSalary(String(value || ""));
-  const beforeSuffix = raw.split(/\s*(?:[-—|｜])\s*/)[0];
-  const withoutParenthetical = raw.replace(/[（(][^）)]{1,40}[）)]/g, " ");
-  const candidates = [raw, beforeSuffix, withoutParenthetical,
-    beforeSuffix.replace(/[（(][^）)]{1,40}[）)]/g, " ")];
-  return Array.from(new Set(candidates.map((item) => comparableJobText(item))))
-    .filter((item) => item.length >= 4);
 }
 
 async function selectJobDetail(job) {
@@ -2106,10 +1981,10 @@ function findJobCardActivationTargets(card) {
 }
 
 function detailMatchesJob(job) {
-  return Boolean(findImmediateCommunicateButtonForJob(job));
+  return Boolean(findCommunicationButtonForJob(job));
 }
 
-function immediateCommunicateButtonMatchesJob(button, job) {
+function communicationButtonMatchesJob(button, job) {
   const detail = findJobDetailScope(button);
   if (!detail) return false;
   const targetTitle = comparableJobText(job.jobName || job.title || "");
@@ -2281,16 +2156,16 @@ function findCards() {
   return [];
 }
 
-function findImmediateCommunicateButtons(root) {
+function findCommunicationButtons(root) {
   const items = Array.from(root.querySelectorAll("a,button"));
   return items.filter((item) => !isInsideJobCopilot(item)
     && isElementVisible(item)
-    && cleanText(item.innerText || item.textContent || "") === "立即沟通");
+    && /^(立即沟通|继续沟通|继续聊)$/.test(cleanText(item.innerText || item.textContent || "")));
 }
 
-function findImmediateCommunicateButtonForJob(job) {
-  return findImmediateCommunicateButtons(document)
-    .find((button) => immediateCommunicateButtonMatchesJob(button, job)) || null;
+function findCommunicationButtonForJob(job) {
+  return findCommunicationButtons(document)
+    .find((button) => communicationButtonMatchesJob(button, job)) || null;
 }
 
 function extractJobName(card, text) {
@@ -2508,7 +2383,7 @@ async function collectJobDescriptionForAnalysis(job) {
   if (!selected) {
     return { text: cardText, complete: false };
   }
-  const communicateButton = findImmediateCommunicateButtonForJob(job);
+  const communicateButton = findCommunicationButtonForJob(job);
   const detailScope = communicateButton ? findJobDetailScope(communicateButton) : null;
   const detailText = stripObfuscatedSalary(detailScope?.innerText || "")
     .replace(/[█▉▊▋▌▍▎▏■]+/g, "")

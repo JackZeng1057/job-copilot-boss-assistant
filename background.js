@@ -23,16 +23,6 @@ const AUTOMATION_SESSION_KEY = "jobCopilotAutomationSessionV1";
 const AUTOMATION_LOG_KEY = "jobCopilotAutomationLogV1";
 const AUTOMATION_LOG_LIMIT = 200;
 const IDLE_DETECTION_INTERVAL_SECONDS = 60;
-const ISOLATED_CONTACT_LOAD_TIMEOUT_MS = 18000;
-// The content script may spend 10s locating BOSS's button and another 34.2s
-// on its bounded confirmation flow. Inactive disposable tabs can be timer-
-// throttled by Chromium, so that nominal duration is not a reliable wall-clock
-// upper bound. This timeout is
-// only a hung-channel guard; normal confirmation is allowed a wider budget.
-const ISOLATED_CONTACT_ACTION_TIMEOUT_MS = 120000;
-// If the action callback is lost, keep the disposable tab alive and let the
-// extension resolve/check the native confirmation itself before giving up.
-const ISOLATED_CONTACT_RECOVERY_TIMEOUT_MS = 30000;
 const automationStorage = chrome.storage.session || chrome.storage.local;
 
 function consumeRuntimeLastError() {
@@ -94,12 +84,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === "openManualChatTab") {
     openOrFocusManualChatTab(sender.tab)
-      .then((result) => sendResponse({ ok: true, ...result }))
-      .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
-    return true;
-  }
-  if (message?.type === "communicateInIsolatedTab") {
-    communicateInIsolatedTab(sender.tab, message.job)
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
     return true;
@@ -283,194 +267,6 @@ async function openOrFocusManualChatTab(senderTab) {
   return { tabId: chatTab.id, reused: false };
 }
 
-async function communicateInIsolatedTab(senderTab, job) {
-  if (!senderTab?.id || !isAutomationJobsUrl(senderTab.url || "")) {
-    throw new Error("只能从 BOSS 职位页发起隔离沟通");
-  }
-  const workerUrl = isolatedContactUrl(job?.url);
-  // Never attach an opener to the disposable tab. BOSS scripts running there
-  // must have no reference capable of navigating the dedicated jobs tab.
-  const worker = await createTabWithTransientRetry({
-    url: workerUrl,
-    active: false,
-    windowId: senderTab.windowId,
-    index: Number.isInteger(senderTab.index) ? senderTab.index + 1 : undefined
-  });
-  if (!worker?.id) throw new Error("无法创建临时沟通标签");
-  await setTabAutoDiscardable(worker.id, false);
-
-  await appendAutomationLog({
-    event: "isolated_contact_tab_opened",
-    title: job?.title,
-    page: workerUrl
-  }, senderTab.id);
-
-  let stage = "loading";
-  try {
-    try {
-      await waitForTabComplete(worker.id, ISOLATED_CONTACT_LOAD_TIMEOUT_MS);
-    } catch (loadError) {
-      // Some BOSS detail pages keep the tab loading flag alive even though the
-      // content script and React view are already usable. Probe readiness before
-      // treating the browser-level loading timeout as a real failure.
-      const readiness = await sendTabMessageWithTimeout(worker.id, {
-        type: "inspectIsolatedCommunicationResult",
-        resolvePendingConfirmation: true
-      }, 2500);
-      if (!readiness?.ok) throw loadError;
-      if (readiness.confirmed) return { status: "stayed" };
-      if (readiness.status) return { status: readiness.status };
-      await appendAutomationLog({
-        event: "isolated_contact_loaded_via_probe",
-        title: job?.title,
-        page: workerUrl,
-        detail: "tab_status_timeout_but_content_ready"
-      }, senderTab.id);
-    }
-    stage = "action";
-    const response = await sendTabMessageWithTimeout(worker.id, {
-      type: "performIsolatedCommunication",
-      expectedJob: {
-        key: String(job?.key || ""),
-        title: String(job?.title || ""),
-        company: String(job?.company || ""),
-        url: workerUrl
-      }
-    }, ISOLATED_CONTACT_ACTION_TIMEOUT_MS);
-    if (response?.ok) {
-      const status = response.status === "chat_route" ? "navigated_chat" : (response.status || "unknown");
-      if (status === "stay_missing" || status === "unknown") {
-        stage = "verification";
-        const recoveredStatus = await verifyIsolatedContactOutcome(
-          worker.id,
-          ISOLATED_CONTACT_RECOVERY_TIMEOUT_MS
-        );
-        if (recoveredStatus) {
-          await appendAutomationLog({
-            event: "isolated_contact_verified_after_wait",
-            title: job?.title,
-            page: workerUrl,
-            detail: `status=${recoveredStatus}`
-          }, senderTab.id);
-          return { status: recoveredStatus };
-        }
-      }
-      await appendAutomationLog({
-        event: `isolated_contact_${status}`,
-        title: job?.title,
-        page: workerUrl
-      }, senderTab.id);
-      return { status };
-    }
-
-    // A long sendMessage callback can be lost while BOSS is navigating or
-    // replacing its React tree. Perform a fresh verification and resolve any
-    // pending stay-on-page confirmation before reporting failure; never repeat
-    // the communication click here.
-    stage = "timeout_recovery";
-    const recoveredStatus = await verifyIsolatedContactOutcome(
-      worker.id,
-      ISOLATED_CONTACT_RECOVERY_TIMEOUT_MS
-    );
-    if (recoveredStatus) {
-      await appendAutomationLog({
-        event: "isolated_contact_recovered_after_error",
-        title: job?.title,
-        page: workerUrl,
-        detail: `error=${String(response?.error || "unknown").slice(0, 120)};status=${recoveredStatus}`
-      }, senderTab.id);
-      return { status: recoveredStatus };
-    }
-    throw new Error(response?.error || "临时沟通标签未返回结果");
-  } catch (error) {
-    const current = await getTab(worker.id).catch(() => null);
-    await appendAutomationLog({
-      event: "isolated_contact_failed",
-      title: job?.title,
-      page: current?.url || workerUrl,
-      detail: `stage=${stage};error=${String(error?.message || error).slice(0, 180)}`
-    }, senderTab.id);
-    throw error;
-  } finally {
-    await setTabAutoDiscardable(worker.id, true);
-    await removeTab(worker.id).catch(() => {});
-  }
-}
-
-async function verifyIsolatedContactOutcome(tabId, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  do {
-    const tab = await getTab(tabId).catch(() => null);
-    const url = tab?.url || "";
-    if (isBossChatUrl(url)) return "navigated_chat";
-    if (/\/web\/passport\/|security|captcha|verify/i.test(url)) return "blocked_security";
-
-    const inspection = await sendTabMessageWithTimeout(tabId, {
-      type: "inspectIsolatedCommunicationResult",
-      resolvePendingConfirmation: true
-    }, Math.min(2000, Math.max(500, deadline - Date.now())));
-    if (inspection?.ok) {
-      if (inspection.confirmed) return "stayed";
-      if (inspection.status) return inspection.status;
-    }
-    if (Date.now() >= deadline) break;
-    await delay(400);
-  } while (Date.now() < deadline);
-  return "";
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isolatedContactUrl(value) {
-  const url = new URL(String(value || ""), "https://www.zhipin.com");
-  if (url.hostname !== "www.zhipin.com" || !/\/job_detail\//.test(url.pathname)) {
-    throw new Error("岗位缺少可用的 BOSS 详情链接");
-  }
-  return url.href;
-}
-
-function waitForTabComplete(tabId, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      chrome.tabs.onUpdated?.removeListener?.(onUpdated);
-      if (error) reject(error);
-      else resolve();
-    };
-    const onUpdated = (updatedTabId, changeInfo) => {
-      if (updatedTabId === tabId && changeInfo.status === "complete") finish();
-    };
-    const timer = setTimeout(() => finish(new Error("临时沟通标签加载超时")), timeoutMs);
-    chrome.tabs.onUpdated?.addListener?.(onUpdated);
-    getTab(tabId).then((tab) => {
-      if (tab?.status === "complete") finish();
-    }).catch((error) => finish(error));
-  });
-}
-
-function sendTabMessageWithTimeout(tabId, message, timeoutMs) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(value);
-    };
-    const timer = setTimeout(() => finish({ ok: false, error: "临时沟通动作超时" }), timeoutMs);
-    chrome.tabs.sendMessage(tabId, message, (response) => {
-      const error = consumeRuntimeLastError();
-      if (error) finish({ ok: false, error: error.message });
-      else finish(response || { ok: false, error: "临时沟通标签没有响应" });
-    });
-  });
-}
-
 async function controlAutomationTab(action) {
   const session = await getAutomationSession();
   if (!session?.tabId) return false;
@@ -547,15 +343,56 @@ async function handleAutomationTabNavigation(tabId, url) {
   if (!session?.active || session.tabId !== tabId || !session.jobsUrl) return;
   if (isAutomationJobsUrl(url)) return;
 
-  // Never repair a departed SPA page with history.back() or a saved URL. Both
-  // reload BOSS's in-memory job list and can silently switch categories. The
-  // Automatic communication runs in a disposable tab, so the owner jobs tab
-  // should only leave because of an explicit user action or an external route.
+  if (session.contactInFlight && session.currentJobKey && isBossChatUrl(url)) {
+    const progress = {
+      ...(session.progress || {}),
+      [session.currentJobKey]: {
+        status: "contacted",
+        detail: "已点击沟通按钮，并从消息页返回原职位列表",
+        updatedAt: Date.now()
+      }
+    };
+    const completedJobKeys = Array.from(new Set([
+      ...(Array.isArray(session.completedJobKeys) ? session.completedJobKeys : []),
+      session.currentJobKey
+    ])).slice(-500);
+    const summary = {
+      ...(session.summary || {}),
+      contacted: Object.values(progress).filter((item) => item?.status === "contacted").length
+    };
+    await saveAutomationSession({
+      ...session,
+      progress,
+      completedJobKeys,
+      summary,
+      contactInFlight: false,
+      currentJobKey: "",
+      status: "BOSS 打开了消息页，插件正在返回原职位列表并继续。",
+      updatedAt: Date.now()
+    });
+
+    let restoreMethod = "go_back";
+    try {
+      await goBackTab(tabId);
+    } catch {
+      restoreMethod = "saved_jobs_url";
+      await updateTab(tabId, { url: session.jobsUrl });
+    }
+    await appendAutomationLog({
+      event: "contact_chat_navigation_restored",
+      page: url,
+      detail: `restore=${restoreMethod};to=${session.jobsUrl}`
+    }, tabId);
+    return;
+  }
+
+  // Navigation unrelated to the one in-flight communication click remains a
+  // hard boundary: do not guess that the user intended automation to continue.
   const progress = { ...(session.progress || {}) };
   if (session.contactInFlight && session.currentJobKey) {
     progress[session.currentJobKey] = {
       status: "attention",
-      detail: "BOSS 异常离开职位页，已暂停且不会自动返回或重复沟通",
+      detail: "BOSS 异常离开职位页，自动投递已暂停",
       updatedAt: Date.now()
     };
   }
@@ -573,7 +410,7 @@ async function handleAutomationTabNavigation(tabId, url) {
   await appendAutomationLog({
     event: "automation_tab_navigation_paused",
     page: url,
-    detail: `restore=disabled;from=${session.jobsUrl}`
+    detail: `restore=not_contact_chat;from=${session.jobsUrl}`
   }, tabId);
 }
 
@@ -606,22 +443,6 @@ function createTab(options) {
   }));
 }
 
-async function createTabWithTransientRetry(options, attempts = 3) {
-  let lastError;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      return await createTab(options);
-    } catch (error) {
-      lastError = error;
-      const transientTabLock = /tabs cannot be edited right now|user may be dragging a tab/i
-        .test(String(error?.message || error || ""));
-      if (!transientTabLock || attempt === attempts - 1) throw error;
-      await delay(250 * (attempt + 1));
-    }
-  }
-  throw lastError;
-}
-
 function queryTabs(queryInfo) {
   return new Promise((resolve, reject) => chrome.tabs.query(queryInfo, (tabs) => {
     const error = consumeRuntimeLastError();
@@ -646,16 +467,8 @@ function updateTab(tabId, changes) {
   }));
 }
 
-function getTab(tabId) {
-  return new Promise((resolve, reject) => chrome.tabs.get(tabId, (tab) => {
-    const error = consumeRuntimeLastError();
-    if (error) reject(new Error(error.message));
-    else resolve(tab);
-  }));
-}
-
-function removeTab(tabId) {
-  return new Promise((resolve, reject) => chrome.tabs.remove(tabId, () => {
+function goBackTab(tabId) {
+  return new Promise((resolve, reject) => chrome.tabs.goBack(tabId, () => {
     const error = consumeRuntimeLastError();
     if (error) reject(new Error(error.message));
     else resolve();

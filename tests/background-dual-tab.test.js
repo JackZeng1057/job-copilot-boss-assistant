@@ -47,6 +47,10 @@ async function runNavigationScenario(contactInFlight, targetUrl = "https://www.z
       updatedTabs.push({ tabId, changes });
       callback({ id: tabId, ...changes });
     },
+    goBack(tabId, callback) {
+      historyBackTabs.push(tabId);
+      callback();
+    },
     sendMessage(_tabId, _message, callback) { callback({ ok: true }); }
   };
 
@@ -84,22 +88,33 @@ async function runNavigationScenario(contactInFlight, targetUrl = "https://www.z
   updatedListener(7, { url: targetUrl });
   await new Promise((resolve) => setTimeout(resolve, 20));
 
-  assert.equal(historyBackTabs.length, 0);
   assert.equal(createdTabs.length, 0);
-  assert.equal(updatedTabs.some((entry) => entry.changes.url), false);
   assert.equal(updatedTabs[0].changes.autoDiscardable, false);
-  assert.equal(updatedTabs.at(-1).changes.autoDiscardable, true);
 
   const saved = session.values.jobCopilotAutomationSessionV1;
-  assert.deepEqual(Array.from(saved.completedJobKeys), ["job:previous"]);
   assert.equal(saved.batchNumber, 3);
   assert.deepEqual(Array.from(saved.batchKeys), [jobKey]);
-  assert.equal(saved.active, false);
-  assert.equal(saved.paused, true);
-  assert.equal(saved.status.includes("不会被自动刷新"), true);
-  if (contactInFlight) {
+  if (contactInFlight && targetUrl.includes("/web/geek/chat")) {
+    assert.deepEqual(historyBackTabs, [7]);
+    assert.equal(updatedTabs.some((entry) => entry.changes.url), false);
+    assert.deepEqual(Array.from(saved.completedJobKeys), ["job:previous", jobKey]);
+    assert.equal(saved.active, true);
+    assert.equal(saved.paused, false);
     assert.equal(saved.contactInFlight, false);
-    assert.equal(saved.progress[jobKey].status, "attention");
+    assert.equal(saved.progress[jobKey].status, "contacted");
+    assert.match(saved.status, /返回原职位列表/);
+  } else {
+    assert.equal(historyBackTabs.length, 0);
+    assert.equal(updatedTabs.some((entry) => entry.changes.url), false);
+    assert.deepEqual(Array.from(saved.completedJobKeys), ["job:previous"]);
+    assert.equal(saved.active, false);
+    assert.equal(saved.paused, true);
+    assert.match(saved.status, /已暂停/);
+    if (contactInFlight) {
+      assert.equal(saved.contactInFlight, false);
+      assert.equal(saved.progress[jobKey].status, "attention");
+    }
+    assert.equal(updatedTabs.at(-1).changes.autoDiscardable, true);
   }
 }
 
@@ -194,7 +209,7 @@ async function runManualChatScenario(existingChatTab = null) {
   await runNavigationScenario(false, "https://www.zhipin.com/web/geek/resume");
   await runManualChatScenario();
   await runManualChatScenario({ id: 44, windowId: 6, url: "https://www.zhipin.com/web/geek/chat" });
-  console.log("Dual-tab navigation isolation tests passed");
+  console.log("Current-tab navigation boundary tests passed");
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
