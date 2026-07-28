@@ -56,6 +56,7 @@ const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/
   };
 
   vm.runInNewContext(source, {
+    AbortController,
     chrome: { runtime, storage: { local } },
     console,
     fetch,

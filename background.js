@@ -23,6 +23,7 @@ const AUTOMATION_SESSION_KEY = "jobCopilotAutomationSessionV1";
 const AUTOMATION_LOG_KEY = "jobCopilotAutomationLogV1";
 const AUTOMATION_LOG_LIMIT = 200;
 const IDLE_DETECTION_INTERVAL_SECONDS = 60;
+const AI_REQUEST_TIMEOUT_MS = 90000;
 const automationStorage = chrome.storage.session || chrome.storage.local;
 
 function consumeRuntimeLastError() {
@@ -279,7 +280,15 @@ async function controlAutomationTab(action) {
       updatedAt: Date.now()
     });
   }
-  return sendAutomationControl(session.tabId, action, "manual");
+  const sent = await sendAutomationControl(session.tabId, action, "manual");
+  if (sent && ["pause", "resume"].includes(action)) {
+    await appendAutomationLog({
+      event: action === "pause" ? "automation_paused_manual" : "automation_resumed_manual",
+      page: session.jobsUrl,
+      detail: "source=remote_panel"
+    }, session.tabId);
+  }
+  return sent;
 }
 
 function sendAutomationControl(tabId, action, reason) {
@@ -579,6 +588,22 @@ async function callAi(settings, content, temperature) {
   return callOpenAiCompatible(settings, content, temperature, protocol === "azure_openai");
 }
 
+async function fetchAiResponse(endpoint, options, timeoutMs = AI_REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(endpoint, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      const seconds = Math.max(1, Math.ceil(timeoutMs / 1000));
+      throw new Error(`AI 请求超时：超过 ${seconds} 秒未完成，请稍后重试`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function callOpenAiCompatible(settings, content, temperature, azure = false) {
   const endpoint = azure
     ? exactApiEndpoint(settings.apiBaseUrl)
@@ -588,7 +613,7 @@ async function callOpenAiCompatible(settings, content, temperature, azure = fals
     "Accept": "application/json",
     ...apiAuthenticationHeaders(settings, azure ? "api-key" : settings.apiAuthType)
   };
-  const response = await fetch(endpoint, {
+  const response = await fetchAiResponse(endpoint, {
     method: "POST",
     headers,
     body: JSON.stringify({
@@ -607,7 +632,7 @@ async function callOpenAiCompatible(settings, content, temperature, azure = fals
 
 async function callAnthropic(settings, content, temperature) {
   const endpoint = appendApiPath(settings.apiBaseUrl, "/v1/messages", /\/v1\/messages$/i);
-  const response = await fetch(endpoint, {
+  const response = await fetchAiResponse(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -632,7 +657,7 @@ async function callAnthropic(settings, content, temperature) {
 
 async function callOpenAiResponses(settings, content, temperature) {
   const endpoint = responsesEndpoint(settings.apiBaseUrl);
-  const response = await fetch(endpoint, {
+  const response = await fetchAiResponse(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -659,7 +684,7 @@ async function callOpenAiResponses(settings, content, temperature) {
 
 async function callGemini(settings, content, temperature) {
   const endpoint = geminiEndpoint(settings.apiBaseUrl, settings.model);
-  const response = await fetch(endpoint, {
+  const response = await fetchAiResponse(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

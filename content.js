@@ -50,7 +50,7 @@ const KNOWN_JOB_CITIES = [
   "北京", "上海", "广州", "深圳", "杭州", "南京", "苏州", "成都", "重庆", "武汉", "西安", "天津",
   "长沙", "郑州", "青岛", "厦门", "合肥", "佛山", "东莞", "宁波", "无锡", "珠海", "福州"
 ];
-const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.8.1";
+const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.8.2";
 const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-current-page-contact-v1`;
 const RUNTIME_PROBE_EVENT = "job-copilot-runtime-probe";
 const RUNTIME_ACK_EVENT = "job-copilot-runtime-ack";
@@ -519,6 +519,9 @@ async function handlePipelineControl() {
   if (JC_STATE.pipeline.allPaused) {
     JC_STATE.pipeline.allPaused = false;
     setStatus("自动投递已继续，将从未完成岗位接着执行。");
+    logAutomationEvent("automation_resumed_manual", {
+      detail: "source=owner_panel"
+    });
     updateAutomationControls();
     ensureAnalysisWorker();
     return;
@@ -526,6 +529,9 @@ async function handlePipelineControl() {
   if (JC_STATE.pipeline.waitingForNextBatch || JC_STATE.pipeline.loadingNextBatch) {
     JC_STATE.pipeline.allPaused = true;
     setStatus("正在暂停连续投递，批次进度会保留。");
+    logAutomationEvent("automation_paused_manual", {
+      detail: "source=owner_panel;phase=batch_transition"
+    });
     updateAutomationControls();
     schedulePersistAutomationSession();
     return;
@@ -533,6 +539,9 @@ async function handlePipelineControl() {
   if (JC_STATE.analyzing) {
     JC_STATE.pipeline.allPaused = true;
     setStatus("正在暂停自动投递。当前步骤结束后停止，岗位进度会保留。");
+    logAutomationEvent("automation_paused_manual", {
+      detail: "source=owner_panel;phase=analysis"
+    });
     updateAutomationControls();
     return;
   }
@@ -1011,7 +1020,7 @@ async function analyzeJobs(options = {}) {
       excludedDirections: JC_STATE.settings.excludedDirections,
       customInstructions: buildCustomInstructions()
     };
-    const response = await sendMessage({ type: "analyzeJob", payload });
+    const response = await requestAiAnalysis(job, payload);
     if (JC_STATE.analysisRunId !== runId || JC_STATE.page.generation !== pageGeneration) {
       return { completed: false, reason: "superseded", analyzed: analyzedCount };
     }
@@ -1309,11 +1318,17 @@ async function advanceToNextBatch() {
   updateAutomationControls();
 
   const deadline = Date.now() + BETWEEN_BATCHES_DELAY_MS;
+  logAutomationEvent("batch_wait_started", {
+    detail: `batch=${JC_STATE.pipeline.batchNumber};delayMs=${BETWEEN_BATCHES_DELAY_MS}`
+  });
   while (Date.now() < deadline) {
     if (!JC_STATE.pipeline.active || JC_STATE.pipeline.allPaused) {
       JC_STATE.pipeline.waitingForNextBatch = false;
       updateAutomationControls();
       setStatus("连续投递已暂停，批次进度已保留。");
+      logAutomationEvent("batch_wait_interrupted", {
+        detail: `batch=${JC_STATE.pipeline.batchNumber};reason=paused`
+      });
       schedulePersistAutomationSession();
       return { completed: false, reason: "paused" };
     }
@@ -1322,6 +1337,9 @@ async function advanceToNextBatch() {
     await sleep(Math.min(1000, deadline - Date.now()));
   }
 
+  logAutomationEvent("batch_wait_completed", {
+    detail: `batch=${JC_STATE.pipeline.batchNumber}`
+  });
   JC_STATE.pipeline.waitingForNextBatch = false;
   JC_STATE.pipeline.loadingNextBatch = true;
   setStatus("正在加载当前列表后面的岗位...");
@@ -1831,7 +1849,7 @@ function isTransientAiError(error) {
   // Browser and service-worker fetch failures vary across Chromium platforms.
   // Treat network failures and truncated model JSON as retryable so the current
   // job stays pending instead of being skipped or allowing later communication.
-  return /Tunnel connection failed|Failed to fetch|NetworkError|network request failed|Load failed|ERR_(?:NETWORK|INTERNET|CONNECTION|TIMED_OUT)|503|502|504|timeout|timed out|Service Unavailable|Bad Gateway|Gateway Timeout|Unexpected end of JSON input|unterminated JSON|JSON.*(?:incomplete|truncated)/i.test(String(error || ""));
+  return /Tunnel connection failed|Failed to fetch|NetworkError|network request failed|Load failed|ERR_(?:NETWORK|INTERNET|CONNECTION|TIMED_OUT)|503|502|504|请求超时|timeout|timed out|Service Unavailable|Bad Gateway|Gateway Timeout|Unexpected end of JSON input|unterminated JSON|JSON.*(?:incomplete|truncated)/i.test(String(error || ""));
 }
 
 function isExtensionContextError(error) {
@@ -1860,6 +1878,9 @@ function friendlyAiError(error) {
   }
   if (/Unexpected end of JSON input|unterminated JSON|JSON.*(?:incomplete|truncated)/i.test(text)) {
     return "AI 服务返回内容不完整，已暂停并保留当前岗位；恢复后可从该岗位重新分析。";
+  }
+  if (/请求超时|timeout|timed out/i.test(text)) {
+    return "AI 响应超时，已暂停并保留当前岗位；网络恢复后可从该岗位继续。";
   }
   if (isTransientAiError(text)) {
     return "AI 服务网络/代理暂时不可用，建议稍后重试；这不是岗位不匹配。";
@@ -2054,18 +2075,56 @@ function isBossChatUrl(url) {
   }
 }
 
-function logContactEvent(event, job) {
+function logAutomationEvent(event, options = {}) {
+  const job = options.job;
   const entry = {
     event,
-    jobIndex: Number(job?.index ?? -1),
+    jobIndex: Number(job?.index ?? options.jobIndex ?? -1),
     title: cleanText(job?.jobName || job?.title || "").slice(0, 40),
-    page: location.pathname
+    page: location.pathname,
+    detail: cleanText(options.detail || "").slice(0, 240)
   };
-  console.info("[Job Copilot] contact", entry);
+  console.info("[Job Copilot] automation", entry);
   sendMessage({
     type: "appendAutomationLog",
-    entry: { ...entry, detail: `jobIndex=${entry.jobIndex}` }
+    entry
   }).catch(() => {});
+}
+
+function logContactEvent(event, job) {
+  logAutomationEvent(event, {
+    job,
+    detail: `jobIndex=${Number(job?.index ?? -1)}`
+  });
+}
+
+async function requestAiAnalysis(job, payload) {
+  const startedAt = Date.now();
+  const baseDetail = `jobIndex=${Number(job?.index ?? -1)}`;
+  logAutomationEvent("ai_analysis_started", { job, detail: baseDetail });
+
+  const progressTimer = setInterval(() => {
+    const elapsedSeconds = Math.max(1, Math.floor((Date.now() - startedAt) / 1000));
+    setStatus(`AI 分析中（已等待 ${elapsedSeconds} 秒）：${job.title}`);
+  }, 5000);
+
+  try {
+    const response = await sendMessage({ type: "analyzeJob", payload });
+    const durationMs = Date.now() - startedAt;
+    logAutomationEvent(response?.ok ? "ai_analysis_completed" : "ai_analysis_failed", {
+      job,
+      detail: `${baseDetail};durationMs=${durationMs};outcome=${response?.ok ? "ok" : "error"}`
+    });
+    return response;
+  } catch (error) {
+    logAutomationEvent("ai_analysis_failed", {
+      job,
+      detail: `${baseDetail};durationMs=${Date.now() - startedAt};outcome=message_error`
+    });
+    throw error;
+  } finally {
+    clearInterval(progressTimer);
+  }
 }
 
 function createStayOnCurrentPageWaiter(timeoutMs = 10000) {

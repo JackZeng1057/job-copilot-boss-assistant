@@ -11,6 +11,7 @@ const storage = {
   remove(_keys, callback) { callback?.(); }
 };
 const sandbox = {
+  AbortController,
   chrome: {
     runtime: { onMessage: { addListener() {} }, get lastError() { return null; } },
     storage: { local: storage, session: storage },

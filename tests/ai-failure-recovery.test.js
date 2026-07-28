@@ -22,6 +22,7 @@ for (const message of [
   "NetworkError when attempting to fetch resource",
   "net::ERR_INTERNET_DISCONNECTED",
   "AI request failed: status=503",
+  "AI 请求超时：超过 90 秒未完成，请稍后重试",
   "Unexpected end of JSON input",
   "unterminated JSON string"
 ]) {
