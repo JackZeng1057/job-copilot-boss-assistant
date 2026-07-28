@@ -50,8 +50,8 @@ const KNOWN_JOB_CITIES = [
   "北京", "上海", "广州", "深圳", "杭州", "南京", "苏州", "成都", "重庆", "武汉", "西安", "天津",
   "长沙", "郑州", "青岛", "厦门", "合肥", "佛山", "东莞", "宁波", "无锡", "珠海", "福州"
 ];
-const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.8.2";
-const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-current-page-contact-v1`;
+const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.8.3";
+const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-isolated-contact-v2`;
 const RUNTIME_PROBE_EVENT = "job-copilot-runtime-probe";
 const RUNTIME_ACK_EVENT = "job-copilot-runtime-ack";
 let pageSyncTimer = null;
@@ -324,6 +324,21 @@ function initPanel() {
   });
   document.getElementById("jc-close").addEventListener("click", () => closePanel(panel, launcher));
   chrome.runtime.onMessage?.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "inspectIsolatedCommunicationResult") {
+      sendResponse({
+        ok: true,
+        ready: true,
+        confirmed: hasSuccessfulContactEvidence(),
+        status: communicationBlockStatus()
+      });
+      return false;
+    }
+    if (message?.type === "performIsolatedCommunication") {
+      performIsolatedCommunication(message.expectedJob)
+        .then((status) => sendResponse({ ok: true, status }))
+        .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
+      return true;
+    }
     if (message?.type !== "automationControl") return false;
     applyExternalAutomationControl(message.action, message.reason);
     sendResponse({ ok: true });
@@ -1171,7 +1186,7 @@ async function startAutoPipeline(options = {}) {
       ? `AI 会把目标城市/地区作为硬性偏好，并仅沟通最终分达到 ${JC_STATE.settings.minScore} 分的岗位`
       : `AI 会综合岗位实际地点，并仅沟通最终分达到 ${JC_STATE.settings.minScore} 分的岗位`;
     const ok = window.confirm(
-      `确认开始连续自动投递？\n\n${locationRule}。每批最多 ${JOB_BATCH_SIZE} 个岗位；岗位达标后等待约 ${Math.round(POST_ANALYSIS_CONTACT_DELAY_MS / 1000)} 秒，在当前职位页点击一次“立即沟通”或“继续沟通”，并优先选择“留在此页”；若 BOSS 仍跳到消息页，插件会返回原职位列表。每个岗位结束后等待约 ${Math.round(BETWEEN_JOBS_DELAY_MS / 1000)} 秒，每批结束后等待 ${Math.round(BETWEEN_BATCHES_DELAY_MS / 1000)} 秒再加载后续岗位。`
+      `确认开始连续自动投递？\n\n${locationRule}。每批最多 ${JOB_BATCH_SIZE} 个岗位；岗位达标后等待约 ${Math.round(POST_ANALYSIS_CONTACT_DELAY_MS / 1000)} 秒。新沟通会在不激活的临时标签中完成并立即关闭，职位列表标签不会进入消息页；已存在沟通的岗位直接记录，不再点击“继续沟通”。每个岗位结束后等待约 ${Math.round(BETWEEN_JOBS_DELAY_MS / 1000)} 秒，每批结束后等待 ${Math.round(BETWEEN_BATCHES_DELAY_MS / 1000)} 秒再加载后续岗位。`
     );
     if (!ok) return false;
   }
@@ -1247,19 +1262,6 @@ function schedulePersistAutomationSession() {
       patch: buildAutomationSessionPayload()
     }).catch(() => {});
   }, 120);
-}
-
-async function updateContactSession(contactInFlight, job) {
-  if (!JC_STATE.sessionOwner) return;
-  JC_STATE.currentJobKey = contactInFlight ? String(job?.key || "") : "";
-  await sendMessage({
-    type: "updateAutomationSession",
-    patch: {
-      contactInFlight,
-      currentJobKey: JC_STATE.currentJobKey,
-      updatedAt: Date.now()
-    }
-  });
 }
 
 function isQualifiedJob(job) {
@@ -1436,12 +1438,12 @@ async function contactQualifiedJob(job, context) {
     return "superseded";
   }
 
-  if (result === "stayed" || result === "navigated_chat") {
+  if (result === "stayed" || result === "navigated_chat" || result === "already_contacted") {
     setJobProgress(job, "contacted");
     completeJob(job);
-    setStatus(result === "navigated_chat"
-      ? `已点击沟通，正在返回原职位列表：${job.title}。`
-      : `已点击沟通并留在当前页：${job.title}。${Math.round(BETWEEN_JOBS_DELAY_MS / 1000)} 秒后继续下一个岗位。`);
+    setStatus(result === "already_contacted"
+      ? `该岗位已有沟通记录，未进入消息页：${job.title}。${Math.round(BETWEEN_JOBS_DELAY_MS / 1000)} 秒后继续下一个岗位。`
+      : `已在后台完成沟通，职位列表保持不变：${job.title}。${Math.round(BETWEEN_JOBS_DELAY_MS / 1000)} 秒后继续下一个岗位。`);
     renderList();
     return "continue";
   }
@@ -1678,21 +1680,28 @@ function safeClick(node) {
   return true;
 }
 
-function clickWithoutNavigation(node) {
+function clickWithinDisposableTab(node) {
   if (!node) return false;
   const anchor = node.closest?.("a[href]");
-  const href = anchor?.getAttribute?.("href") || "";
-  // Keep the href visible to BOSS's delegated handler; removing it can make
-  // some job-detail button variants ignore an otherwise valid click.
-  // Only cancel javascript: URL execution, which Chromium rejects under the
-  // extension page CSP after BOSS's own click handler has already run.
-  if (anchor && /^javascript:/i.test(href)) {
-    anchor.addEventListener("click", (event) => event.preventDefault(), {
-      capture: true,
-      once: true
-    });
+  const originalTarget = anchor?.getAttribute?.("target");
+  const originalRel = anchor?.getAttribute?.("rel");
+  if (anchor) {
+    // Some BOSS button variants are links with target=_blank. Contain their
+    // default navigation inside the inactive worker so no new active chat tab
+    // can be opened while the jobs tab remains untouched.
+    anchor.setAttribute("target", "_self");
+    anchor.setAttribute("rel", "noopener noreferrer");
   }
+  preventJavascriptUrlDefaultOnce(node);
   node.click();
+  if (anchor) {
+    setTimeout(() => {
+      if (originalTarget === null) anchor.removeAttribute("target");
+      else anchor.setAttribute("target", originalTarget);
+      if (originalRel === null) anchor.removeAttribute("rel");
+      else anchor.setAttribute("rel", originalRel);
+    }, 0);
+  }
   return true;
 }
 
@@ -1918,39 +1927,59 @@ function focusJob(key) {
 }
 
 async function clickCommunicateForJob(job) {
-  await updateContactSession(true, job);
-  try {
-    const selected = await selectJobDetail(job);
-    if (!selected) return "detail_mismatch";
-    const button = findCommunicationButtonForJob(job);
-    if (!button) return "no_button";
+  const selected = await selectJobDetail(job);
+  if (!selected) return "detail_mismatch";
+  const button = findCommunicationButtonForJob(job);
+  if (!button) return "no_button";
 
-    const label = cleanText(button.innerText || button.textContent || "");
-    button.scrollIntoView?.({ block: "center", inline: "center" });
-    button.focus?.({ preventScroll: true });
+  const label = cleanText(button.innerText || button.textContent || "");
+  if (/^(继续沟通|继续聊)$/.test(label)) {
+    logContactEvent("existing_conversation_skipped", job);
+    return "already_contacted";
+  }
 
-    if (/^(继续沟通|继续聊)$/.test(label)) {
-      clickWithoutNavigation(button);
-      logContactEvent("existing_conversation_clicked", job);
-      await sleep(250);
-      return isBossChatUrl(location.href) ? "navigated_chat" : "stayed";
+  const response = await sendMessage({
+    type: "communicateInIsolatedTab",
+    job: {
+      key: job.key,
+      title: job.jobName || job.title,
+      company: job.company,
+      url: job.url
+    }
+  });
+  if (!response?.ok) throw new Error(response?.error || "后台沟通失败");
+  const status = String(response.status || "stay_missing");
+  logContactEvent(`isolated_${status}`, job);
+  return status === "chat_route" ? "navigated_chat" : status;
+}
+
+async function performIsolatedCommunication(expectedJob = {}) {
+  const deadline = Date.now() + 12000;
+  while (Date.now() < deadline) {
+    const button = findCommunicationButtons(document)
+      .find((item) => communicationButtonMatchesJob(item, expectedJob));
+    if (!button) {
+      const blocked = communicationBlockStatus();
+      if (blocked) return blocked;
+      await sleep(100);
+      continue;
     }
 
-    const stayWaiter = createStayOnCurrentPageWaiter(6000);
+    const label = cleanText(button.innerText || button.textContent || "");
+    if (/^(继续沟通|继续聊)$/.test(label)) return "already_contacted";
+
+    button.scrollIntoView?.({ block: "center", inline: "center" });
+    button.focus?.({ preventScroll: true });
+    const stayWaiter = createStayOnCurrentPageWaiter(12000);
     try {
-      clickWithoutNavigation(button);
+      clickWithinDisposableTab(button);
       const result = await stayWaiter.promise;
-      const finalResult = result === "stay_missing" ? (communicationBlockStatus() || result) : result;
-      logContactEvent(`current_page_${finalResult}`, job);
-      return finalResult === "chat_route" ? "navigated_chat" : finalResult;
+      return result === "stay_missing" ? (communicationBlockStatus() || result) : result;
     } finally {
       stayWaiter.cancel();
     }
-  } finally {
-    if (!isBossChatUrl(location.href)) {
-      await updateContactSession(false, job).catch(() => {});
-    }
   }
+  return communicationBlockStatus() || "no_button";
 }
 
 function communicationBlockStatus() {

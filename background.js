@@ -24,6 +24,8 @@ const AUTOMATION_LOG_KEY = "jobCopilotAutomationLogV1";
 const AUTOMATION_LOG_LIMIT = 200;
 const IDLE_DETECTION_INTERVAL_SECONDS = 60;
 const AI_REQUEST_TIMEOUT_MS = 90000;
+const ISOLATED_CONTACT_READY_TIMEOUT_MS = 15000;
+const ISOLATED_CONTACT_ACTION_TIMEOUT_MS = 30000;
 const automationStorage = chrome.storage.session || chrome.storage.local;
 
 function consumeRuntimeLastError() {
@@ -85,6 +87,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === "openManualChatTab") {
     openOrFocusManualChatTab(sender.tab)
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
+    return true;
+  }
+  if (message?.type === "communicateInIsolatedTab") {
+    communicateInIsolatedTab(sender.tab, message.job)
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
     return true;
@@ -266,6 +274,104 @@ async function openOrFocusManualChatTab(senderTab) {
     page: chatTab?.url || "https://www.zhipin.com/web/geek/chat"
   }, senderTab.id);
   return { tabId: chatTab.id, reused: false };
+}
+
+async function communicateInIsolatedTab(senderTab, job) {
+  if (!senderTab?.id || !isAutomationJobsUrl(senderTab.url || "")) {
+    throw new Error("只能从 BOSS 职位页发起隔离沟通");
+  }
+  const workerUrl = isolatedContactUrl(job?.url);
+  const worker = await createTab({
+    url: workerUrl,
+    active: false,
+    windowId: senderTab.windowId,
+    index: Number.isInteger(senderTab.index) ? senderTab.index + 1 : undefined
+  });
+  if (!worker?.id) throw new Error("无法创建后台沟通标签");
+  await setTabAutoDiscardable(worker.id, false);
+  await appendAutomationLog({
+    event: "isolated_contact_tab_opened",
+    title: job?.title,
+    page: workerUrl,
+    detail: `ownerTab=${senderTab.id};workerTab=${worker.id};active=false`
+  }, senderTab.id);
+
+  try {
+    const ready = await waitForIsolatedContactReady(worker.id, ISOLATED_CONTACT_READY_TIMEOUT_MS);
+    if (!ready) throw new Error("后台沟通页面加载超时");
+
+    const response = await sendTabMessageWithTimeout(worker.id, {
+      type: "performIsolatedCommunication",
+      expectedJob: {
+        key: String(job?.key || ""),
+        title: String(job?.title || ""),
+        company: String(job?.company || ""),
+        url: workerUrl
+      }
+    }, ISOLATED_CONTACT_ACTION_TIMEOUT_MS);
+
+    let status = response?.ok ? String(response.status || "") : "";
+    if (!status) {
+      const current = await getTab(worker.id).catch(() => null);
+      if (isBossChatUrl(current?.url || "")) status = "navigated_chat";
+    }
+    if (!status) throw new Error(response?.error || "后台沟通未返回结果");
+
+    await appendAutomationLog({
+      event: `isolated_contact_${status}`,
+      title: job?.title,
+      page: workerUrl,
+      detail: `ownerStayed=true;workerTab=${worker.id}`
+    }, senderTab.id);
+    return { status };
+  } finally {
+    await setTabAutoDiscardable(worker.id, true);
+    await removeTab(worker.id).catch(() => {});
+  }
+}
+
+async function waitForIsolatedContactReady(tabId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const response = await sendTabMessageWithTimeout(tabId, {
+      type: "inspectIsolatedCommunicationResult"
+    }, 1200);
+    if (response?.ok && response.ready) return true;
+    const tab = await getTab(tabId).catch(() => null);
+    if (!tab) return false;
+    await delay(250);
+  }
+  return false;
+}
+
+function sendTabMessageWithTimeout(tabId, message, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish({ ok: false, error: "后台沟通动作超时" }), timeoutMs);
+    chrome.tabs.sendMessage(tabId, message, (response) => {
+      const error = consumeRuntimeLastError();
+      if (error) finish({ ok: false, error: error.message });
+      else finish(response || { ok: false, error: "后台沟通页面没有响应" });
+    });
+  });
+}
+
+function isolatedContactUrl(value) {
+  const url = new URL(String(value || ""), "https://www.zhipin.com");
+  if (url.hostname !== "www.zhipin.com" || !/\/job_detail\//.test(url.pathname)) {
+    throw new Error("岗位缺少可用的 BOSS 详情链接");
+  }
+  return url.href;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function controlAutomationTab(action) {
@@ -473,6 +579,22 @@ function updateTab(tabId, changes) {
     const error = consumeRuntimeLastError();
     if (error) reject(new Error(error.message));
     else resolve(tab);
+  }));
+}
+
+function getTab(tabId) {
+  return new Promise((resolve, reject) => chrome.tabs.get(tabId, (tab) => {
+    const error = consumeRuntimeLastError();
+    if (error) reject(new Error(error.message));
+    else resolve(tab);
+  }));
+}
+
+function removeTab(tabId) {
+  return new Promise((resolve, reject) => chrome.tabs.remove(tabId, () => {
+    const error = consumeRuntimeLastError();
+    if (error) reject(new Error(error.message));
+    else resolve();
   }));
 }
 

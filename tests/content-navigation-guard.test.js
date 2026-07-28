@@ -1,62 +1,27 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const vm = require("node:vm");
 
 const source = fs.readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8");
-const start = source.indexOf("function clickWithoutNavigation(node)");
-const end = source.indexOf("function isElementVisible(node)", start);
-assert.ok(start >= 0 && end > start, "navigation-safe click helper must exist");
-
-const helperSource = source.slice(start, end);
-const context = {};
-vm.runInNewContext(`${helperSource}\nthis.clickWithoutNavigation = clickWithoutNavigation;`, context);
-
-let clickCount = 0;
-const anchor = {
-  getAttribute(name) { return name === "href" ? "https://www.zhipin.com/web/geek/chat" : null; }
-};
-const node = {
-  closest(selector) { return selector === "a[href]" ? anchor : null; },
-  click() {
-    clickCount += 1;
-    assert.equal(anchor.getAttribute("href"), "https://www.zhipin.com/web/geek/chat",
-      "BOSS's native handler must receive the original href");
-  }
-};
-
-assert.equal(context.clickWithoutNavigation(node), true);
-assert.equal(clickCount, 1);
-assert.doesNotMatch(helperSource, /removeAttribute\(["']href["']\)/,
-  "communication must not strip information used by BOSS's click handler");
-
-let prevented = false;
-const javascriptAnchor = {
-  getAttribute(name) { return name === "href" ? "javascript:;" : null; },
-  addEventListener(type, listener, options) {
-    assert.equal(type, "click");
-    assert.equal(options.capture, true);
-    assert.equal(options.once, true);
-    listener({ preventDefault() { prevented = true; } });
-  }
-};
-const javascriptNode = {
-  closest() { return javascriptAnchor; },
-  click() { clickCount += 1; }
-};
-assert.equal(context.clickWithoutNavigation(javascriptNode), true);
-assert.equal(prevented, true, "javascript: URL execution must still be cancelled");
-assert.equal(javascriptAnchor.getAttribute("href"), "javascript:;",
-  "the href must remain visible to BOSS while its listener runs");
+const helperStart = source.indexOf("function clickWithinDisposableTab(node)");
+const helperEnd = source.indexOf("function isElementVisible(node)", helperStart);
+const helperSource = source.slice(helperStart, helperEnd);
+assert.ok(helperStart >= 0 && helperEnd > helperStart, "disposable-tab click helper must exist");
+assert.match(helperSource, /setAttribute\(["']target["'],\s*["']_self["']\)/,
+  "link navigation must be contained in the inactive worker tab");
+assert.match(helperSource, /setAttribute\(["']rel["'],\s*["']noopener noreferrer["']\)/,
+  "the worker click must not expose an opener");
+assert.equal((helperSource.match(/node\.click\(\)/g) || []).length, 1,
+  "the worker helper must issue exactly one native click");
 const originalContact = source.slice(
   source.indexOf("async function clickCommunicateForJob(job)"),
-  source.indexOf("function communicationBlockStatus", source.indexOf("async function clickCommunicateForJob(job)"))
+  source.indexOf("async function performIsolatedCommunication", source.indexOf("async function clickCommunicateForJob(job)"))
 );
 assert.match(originalContact, /findCommunicationButtonForJob\(job\)/,
   "the current job detail must provide the communication control");
-assert.match(originalContact, /clickWithoutNavigation\(button\)/,
-  "the current jobs tab should click the native communication control");
-assert.doesNotMatch(originalContact, /communicateInIsolatedTab|createTab|dispatchCommunicationRetryClick/,
-  "automatic communication must not create a worker tab or retry the click");
+assert.match(originalContact, /communicateInIsolatedTab/,
+  "automatic communication must delegate navigation-capable work to a disposable tab");
+assert.doesNotMatch(originalContact, /clickWithoutNavigation\(button\)|dispatchCommunicationRetryClick/,
+  "the jobs tab must never click a communication control or retry a click");
 const manualChatHandler = source.slice(
   source.indexOf("function installManualChatTabHandler"),
   source.indexOf("function isTrustedTopNavigationChatClick", source.indexOf("function installManualChatTabHandler"))
