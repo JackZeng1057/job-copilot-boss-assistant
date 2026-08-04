@@ -53,7 +53,7 @@ function createStorageArea(seed = {}) {
     },
     get(tabId, callback) {
       assert.equal(tabId, workerTab.id);
-      callback(workerTab);
+      callback({ ...workerTab, openerTabId: 7 });
     },
     update(tabId, changes, callback) {
       updatedTabs.push({ tabId, changes });
@@ -112,8 +112,11 @@ function createStorageArea(seed = {}) {
   assert.equal(createdTabs.length, 1);
   assert.equal(createdTabs[0].active, false, "the communication tab must never steal focus");
   assert.equal(createdTabs[0].windowId, ownerTab.windowId);
+  assert.equal(createdTabs[0].openerTabId, ownerTab.id,
+    "the disposable tab must be cryptographically tied to the owner identity before cleanup");
   assert.equal(createdTabs[0].index, ownerTab.index + 1);
   assert.deepEqual(removedTabs, [workerTab.id], "the disposable tab must be closed after verification");
+  assert.notEqual(removedTabs[0], ownerTab.id, "the owner jobs tab must never enter the disposable close path");
   assert.equal(sentMessages.filter((entry) => entry.message.type === "performIsolatedCommunication").length, 1,
     "one job may dispatch only one communication action");
   assert.equal(updatedTabs.some((entry) => entry.tabId === ownerTab.id), false,

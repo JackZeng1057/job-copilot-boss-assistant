@@ -42,15 +42,33 @@ const JC_STATE = {
 const PANEL_GEOMETRY_KEY = "jobCopilotPanelGeometryV2";
 const LAUNCHER_TOP_KEY = "jobCopilotLauncherTop";
 const PAGE_SYNC_DEBOUNCE_MS = 450;
-const POST_ANALYSIS_CONTACT_DELAY_MS = 8000;
-const BETWEEN_JOBS_DELAY_MS = 10000;
+const PAGE_SNAPSHOT_POLL_MS = 5000;
+const JOB_SNAPSHOT_STABILITY_ATTEMPTS = 2;
+const MANUAL_CHAT_SCAN_DELAY_MS = 120;
+const MANUAL_CHAT_SCAN_FALLBACK_MS = 2000;
+const CONTACT_BUTTON_POLL_MS = 250;
+const CONTACT_BLOCK_CHECK_MS = 750;
+const CONTACT_CONFIRMATION_MIN_INTERVAL_MS = 250;
+const CONTACT_CONFIRMATION_FALLBACK_MS = 500;
+const POST_ANALYSIS_CONTACT_DELAY_MS = 4000;
+const BETWEEN_JOBS_DELAY_MS = 6000;
 const JOB_BATCH_SIZE = 15;
 const BETWEEN_BATCHES_DELAY_MS = 60000;
+const MAX_DETACHED_JOBS = 50;
+const MAX_COMPLETED_JOB_KEYS = 500;
+const JOB_CARD_SELECTORS = [
+  ".job-card-wrapper", ".job-list-box li", "li[class*='job-card']", "div[class*='job-card']"
+];
+const JOB_CARD_SELECTOR = JOB_CARD_SELECTORS.join(",");
+const CONTACT_STATUS_SELECTOR = [
+  "[role='dialog']", "[role='status']", "[aria-live]", ".dialog", ".modal", ".boss-dialog",
+  "[class*='dialog']", "[class*='modal']", "[class*='toast']", "[class*='message']"
+].join(",");
 const KNOWN_JOB_CITIES = [
   "北京", "上海", "广州", "深圳", "杭州", "南京", "苏州", "成都", "重庆", "武汉", "西安", "天津",
   "长沙", "郑州", "青岛", "厦门", "合肥", "佛山", "东莞", "宁波", "无锡", "珠海", "福州"
 ];
-const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.8.3";
+const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.8.5";
 const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-isolated-contact-v2`;
 const RUNTIME_PROBE_EVENT = "job-copilot-runtime-probe";
 const RUNTIME_ACK_EVENT = "job-copilot-runtime-ack";
@@ -59,8 +77,10 @@ let pageSyncRunning = false;
 let pageSyncRequested = false;
 let pageObserver = null;
 let sessionPersistTimer = null;
+let manualChatScanTimer = null;
 let manualChatHitbox = null;
 let manualChatOpenAt = 0;
+const frameworkSalaryCache = new WeakMap();
 
 const SHOULD_BOOT_CONTENT_RUNTIME = !hasLiveContentRuntime();
 if (SHOULD_BOOT_CONTENT_RUNTIME) {
@@ -92,14 +112,22 @@ function installManualChatTabHandler(force = false) {
   if (!force && document.documentElement.dataset.jcManualChatHandler === CONTENT_SCRIPT_VERSION) return;
   document.documentElement.dataset.jcManualChatHandler = CONTENT_SCRIPT_VERSION;
   hardenManualChatLinks();
-  const linkObserver = new MutationObserver(hardenManualChatLinks);
+  const linkObserver = new MutationObserver(() => scheduleManualChatLinkHardening());
   linkObserver.observe(document.documentElement, { childList: true, subtree: true });
-  window.addEventListener("resize", hardenManualChatLinks, true);
-  window.addEventListener("scroll", hardenManualChatLinks, true);
-  window.setInterval(hardenManualChatLinks, 250);
+  window.addEventListener("resize", scheduleManualChatLinkHardening, true);
+  window.addEventListener("scroll", scheduleManualChatLinkHardening, { capture: true, passive: true });
+  window.setInterval(scheduleManualChatLinkHardening, MANUAL_CHAT_SCAN_FALLBACK_MS);
   window.addEventListener("pointerdown", handleManualChatHitboxEvent, true);
   window.addEventListener("click", handleManualChatHitboxEvent, true);
   document.addEventListener("click", handleManualChatClick, true);
+}
+
+function scheduleManualChatLinkHardening() {
+  if (manualChatScanTimer) return;
+  manualChatScanTimer = setTimeout(() => {
+    manualChatScanTimer = null;
+    hardenManualChatLinks();
+  }, MANUAL_CHAT_SCAN_DELAY_MS);
 }
 
 function handleManualChatHitboxEvent(event) {
@@ -391,7 +419,9 @@ function restoreOwnedAutomationSession(session) {
   JC_STATE.remoteSession = null;
   JC_STATE.analyses = new Map(restoredAnalyses);
   JC_STATE.jobProgress = new Map(restoredProgress);
-  JC_STATE.completedJobKeys = new Set(Array.isArray(session.completedJobKeys) ? session.completedJobKeys : []);
+  JC_STATE.completedJobKeys = new Set(
+    (Array.isArray(session.completedJobKeys) ? session.completedJobKeys : []).slice(-MAX_COMPLETED_JOB_KEYS)
+  );
   for (const job of JC_STATE.jobs) {
     if (!JC_STATE.jobProgress.has(job.key)) JC_STATE.jobProgress.set(job.key, { status: "pending", detail: "" });
   }
@@ -528,7 +558,8 @@ async function handlePipelineControl() {
     return;
   }
   if (JC_STATE.pipeline.contextInvalidated) {
-    location.reload();
+    setStatus("扩展已重新加载；为保护当前职位列表，插件不会自动刷新。请确认筛选条件已保存后，使用浏览器刷新按钮手动加载新版。");
+    updateAutomationControls();
     return;
   }
   if (JC_STATE.pipeline.allPaused) {
@@ -826,7 +857,9 @@ function isLocationMetadata(text) {
 
 function captureJobSnapshot() {
   const jobs = findCards().map((card, index) => {
-    const text = cleanText(card.innerText || "");
+    // innerText forces style/layout for every card. textContent is sufficient
+    // for extraction and keeps repeated list snapshots off the rendering path.
+    const text = cleanText(card.textContent || "");
     const salaryInfo = extractSalaryInfo(card, text);
     const jobName = extractJobName(card, text);
     const title = buildDisplayTitle(jobName, salaryInfo.text, text);
@@ -840,7 +873,9 @@ function captureJobSnapshot() {
       city: extractJobCity(text),
       salary: salaryInfo.text,
       salaryFontFamily: salaryInfo.fontFamily,
-      requirements: extractRequirements(card, text),
+      salaryVisualHtml: salaryInfo.visualHtml,
+      salaryNode: salaryInfo.node,
+      requirements: extractRequirements(text),
       url: extractUrl(card)
     };
     job.key = stableJobKey(job);
@@ -1145,7 +1180,8 @@ function updateAnalysisControls() {
     return;
   }
   if (JC_STATE.pipeline.contextInvalidated) {
-    button.textContent = "刷新页面加载新版";
+    button.textContent = "扩展已更新，请手动刷新";
+    button.disabled = true;
     return;
   }
   if (JC_STATE.pipeline.allPaused) {
@@ -1176,7 +1212,9 @@ async function startAutoPipeline(options = {}) {
     setStatus("页面疑似需要登录、验证码或安全验证，请先人工处理。");
     return false;
   }
-  await synchronizePageContext({ force: true, source: "pipeline" });
+  if (!canReuseJobSnapshotForPipeline()) {
+    await synchronizePageContext({ source: "pipeline" });
+  }
   if (!JC_STATE.jobs.length) {
     setStatus("当前职位页没有识别到岗位，暂时不能启动自动投递。");
     return false;
@@ -1207,6 +1245,15 @@ async function startAutoPipeline(options = {}) {
   updateAutomationControls();
   ensureAnalysisWorker();
   return true;
+}
+
+function canReuseJobSnapshotForPipeline() {
+  if (!JC_STATE.page.initialized || !JC_STATE.jobs.length) return false;
+  if (JC_STATE.page.url !== location.href.split("#")[0]) return false;
+  const cards = findCards();
+  const liveJobs = JC_STATE.jobs.filter((job) => !job.detached);
+  if (!cards.length || cards.length !== liveJobs.length) return false;
+  return cards.every((card, index) => liveJobs[index]?.card === card && card.isConnected);
 }
 
 async function registerAutomationSession() {
@@ -1286,7 +1333,7 @@ function prepareCurrentBatch() {
     const analysis = JC_STATE.analyses.get(job.key);
     if (analysis && (!isQualifiedJob(job)
         || ["contacted", "unavailable", "detail_mismatch", "attention"].includes(progress.status))) {
-      JC_STATE.completedJobKeys.add(job.key);
+      rememberCompletedJobKey(job.key);
     }
   }
   const current = JC_STATE.pipeline.batchKeys.filter((key) => {
@@ -1307,8 +1354,18 @@ function prepareCurrentBatch() {
 
 function completeJob(job) {
   if (!job?.key) return;
-  JC_STATE.completedJobKeys.add(job.key);
+  rememberCompletedJobKey(job.key);
   schedulePersistAutomationSession();
+}
+
+function rememberCompletedJobKey(key) {
+  if (!key) return;
+  JC_STATE.completedJobKeys.delete(key);
+  JC_STATE.completedJobKeys.add(key);
+  while (JC_STATE.completedJobKeys.size > MAX_COMPLETED_JOB_KEYS) {
+    const oldestKey = JC_STATE.completedJobKeys.values().next().value;
+    JC_STATE.completedJobKeys.delete(oldestKey);
+  }
 }
 
 async function advanceToNextBatch() {
@@ -1506,19 +1563,27 @@ async function waitForPacingDelay(durationMs, context) {
 function startPageContextWatcher() {
   if (pageObserver || !document.body) return;
   pageObserver = new MutationObserver((mutations) => {
-    const hasExternalChange = mutations.some((mutation) => !isInsideJobCopilot(mutation.target));
-    if (hasExternalChange) schedulePageContextSync();
+    if (mutations.some(mutationAffectsJobList)) schedulePageContextSync();
   });
   pageObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
   window.addEventListener("popstate", () => schedulePageContextSync(80));
   window.addEventListener("hashchange", () => schedulePageContextSync(80));
   setInterval(() => {
-    if (!isJobsPage()) return;
+    if (!isJobsPage() || JC_STATE.analyzing || JC_STATE.pipeline.loadingNextBatch) return;
     const snapshot = captureJobSnapshot();
     if (snapshot.jobs.length && snapshot.fingerprint !== JC_STATE.page.fingerprint) {
       schedulePageContextSync(80);
     }
-  }, 1200);
+  }, PAGE_SNAPSHOT_POLL_MS);
+}
+
+function mutationAffectsJobList(mutation) {
+  if (isInsideJobCopilot(mutation.target)) return false;
+  const target = mutation.target instanceof Element ? mutation.target : mutation.target?.parentElement;
+  if (target?.closest?.(JOB_CARD_SELECTOR)) return true;
+  const changedNodes = [...(mutation.addedNodes || []), ...(mutation.removedNodes || [])];
+  return changedNodes.some((node) => node instanceof Element
+    && (node.matches?.(JOB_CARD_SELECTOR) || node.querySelector?.(JOB_CARD_SELECTOR)));
 }
 
 function schedulePageContextSync(delay = PAGE_SYNC_DEBOUNCE_MS) {
@@ -1552,7 +1617,7 @@ async function synchronizePageContext(options = {}) {
 
 async function waitForStableJobSnapshot() {
   let previous = captureJobSnapshot();
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 0; attempt < JOB_SNAPSHOT_STABILITY_ATTEMPTS; attempt += 1) {
     await sleep(180);
     const current = captureJobSnapshot();
     if (current.jobs.length && current.fingerprint === previous.fingerprint) return current;
@@ -1610,14 +1675,17 @@ function applyJobSnapshot(snapshot, options = {}) {
     JC_STATE.analyzing = false;
   }
   const reconciled = snapshot.jobs.map((job) => ({ ...previousByKey.get(job.key), ...job, detached: false }));
+  const detachedHistory = [];
   for (const oldJob of previousJobs) {
     const status = progressFor(oldJob).status;
     if (!nextKeys.has(oldJob.key) && ["contacted", "unavailable", "detail_mismatch", "attention"].includes(status)) {
-      reconciled.push({ ...oldJob, detached: true });
+      detachedHistory.push(detachJobRecord(oldJob));
     }
   }
+  reconciled.push(...detachedHistory.slice(-MAX_DETACHED_JOBS));
   const added = snapshot.jobs.filter((job) => !previousByKey.has(job.key));
   JC_STATE.jobs = reconciled.map((job, index) => ({ ...job, index }));
+  pruneJobState(new Set(JC_STATE.jobs.map((job) => job.key)));
   JC_STATE.page.fingerprint = snapshot.fingerprint;
   JC_STATE.page.url = snapshot.url;
   for (const job of added) setJobProgress(job, "pending");
@@ -1629,6 +1697,24 @@ function applyJobSnapshot(snapshot, options = {}) {
     setStatus(`当前职位列表已刷新，共 ${JC_STATE.jobs.length} 个岗位。`);
   }
   return added.length > 0;
+}
+
+function detachJobRecord(job) {
+  return {
+    ...job,
+    card: null,
+    text: String(job?.text || "").slice(0, 3000),
+    detached: true
+  };
+}
+
+function pruneJobState(retainedKeys) {
+  for (const key of JC_STATE.analyses.keys()) {
+    if (!retainedKeys.has(key)) JC_STATE.analyses.delete(key);
+  }
+  for (const key of JC_STATE.jobProgress.keys()) {
+    if (!retainedKeys.has(key)) JC_STATE.jobProgress.delete(key);
+  }
 }
 
 function jobKeyOverlap(previousJobs, nextJobs) {
@@ -1716,48 +1802,108 @@ function isElementVisible(node) {
 function renderList() {
   const list = document.getElementById("jc-list");
   if (!list) return;
-  list.innerHTML = "";
-  for (const job of JC_STATE.jobs) {
-    const analysis = JC_STATE.analyses.get(job.key);
-    const score = analysis?.score ?? "--";
-    const exclusionSummary = analysis?.excluded
-      ? `已排除：${analysis.exclusion_match || analysis.occupation_family || "命中绝不投递岗位"}`
-      : "";
-    const progress = progressFor(job);
-    const progressInfo = jobProgressInfo(progress.status);
-    const meta = [job.company, job.city, job.requirements].filter(Boolean).slice(0, 2).join(" · ");
-    const item = document.createElement("div");
-    item.className = `jc-job-row is-${progressInfo.tone}`;
-    item.innerHTML = `
-      <div class="jc-job-index">${job.index + 1}</div>
-      <div class="jc-job-content">
-        <strong>${renderTitleHtml(job)}</strong>
-        <div class="jc-job-meta">${escapeHtml(meta || "岗位信息待展开")}</div>
-        ${exclusionSummary ? `<div class="jc-audit-summary is-invalid">${escapeHtml(exclusionSummary)}</div>` : ""}
-        ${progress.detail ? `<div class="jc-job-detail">${escapeHtml(progress.detail)}</div>` : ""}
-      </div>
-      <div class="jc-job-result">
-        <span class="jc-progress-chip is-${progressInfo.tone}">${progressInfo.label}</span>
-        <span class="jc-score">${score === "--" ? "" : `${escapeHtml(String(score))} 分`}</span>
-        ${progress.status === "error"
-          ? `<button class="jc-locate-button jc-retry-button" data-retry-key="${escapeAttr(job.key)}" ${job.detached ? "disabled" : ""}>重新分析</button>`
-          : `<button class="jc-locate-button" data-focus-key="${escapeAttr(job.key)}" ${job.detached ? "disabled" : ""}>定位</button>`}
-      </div>
-    `;
-    list.appendChild(item);
-  }
-  list.querySelectorAll("[data-focus-key]").forEach((button) => {
-    button.addEventListener("click", () => focusJob(button.dataset.focusKey));
+  installJobListEventDelegation(list);
+  const existingRows = new Map(
+    Array.from(list.children)
+      .filter((node) => node instanceof HTMLElement && node.dataset.jobKey)
+      .map((node) => [node.dataset.jobKey, node])
+  );
+  const retainedKeys = new Set();
+  JC_STATE.jobs.forEach((job, index) => {
+    retainedKeys.add(job.key);
+    let item = existingRows.get(job.key);
+    if (!item) {
+      item = document.createElement("div");
+      item.dataset.jobKey = job.key;
+    }
+    updateJobRow(item, job);
+    const currentAtIndex = list.children[index] || null;
+    if (currentAtIndex !== item) list.insertBefore(item, currentAtIndex);
   });
-  list.querySelectorAll("[data-retry-key]").forEach((button) => {
-    button.addEventListener("click", () => {
+  for (const [key, item] of existingRows) {
+    if (!retainedKeys.has(key)) item.remove();
+  }
+  updateProgressSummary();
+}
+
+function updateJobRow(item, job) {
+  const analysis = JC_STATE.analyses.get(job.key);
+  const score = analysis?.score ?? "--";
+  const exclusionSummary = analysis?.excluded
+    ? `已排除：${analysis.exclusion_match || analysis.occupation_family || "命中绝不投递岗位"}`
+    : "";
+  const progress = progressFor(job);
+  const progressInfo = jobProgressInfo(progress.status);
+  const meta = [job.company, job.city, job.requirements].filter(Boolean).slice(0, 2).join(" · ");
+  const renderSignature = JSON.stringify([
+    job.index, job.title, job.jobName, job.salary, job.salaryFontFamily, meta, job.detached,
+    progress.status, progress.detail, score, exclusionSummary
+  ]);
+  if (item.dataset.renderSignature === renderSignature) return;
+  item.dataset.renderSignature = renderSignature;
+  item.className = `jc-job-row is-${progressInfo.tone}`;
+  item.innerHTML = `
+    <div class="jc-job-index">${job.index + 1}</div>
+    <div class="jc-job-content">
+      <strong>${renderTitleHtml(job)}</strong>
+      <div class="jc-job-meta">${escapeHtml(meta || "岗位信息待展开")}</div>
+      ${exclusionSummary ? `<div class="jc-audit-summary is-invalid">${escapeHtml(exclusionSummary)}</div>` : ""}
+      ${progress.detail ? `<div class="jc-job-detail">${escapeHtml(progress.detail)}</div>` : ""}
+    </div>
+    <div class="jc-job-result">
+      <span class="jc-progress-chip is-${progressInfo.tone}">${progressInfo.label}</span>
+      <span class="jc-score">${score === "--" ? "" : `${escapeHtml(String(score))} 分`}</span>
+      ${progress.status === "error"
+        ? `<button class="jc-locate-button jc-retry-button" data-retry-key="${escapeAttr(job.key)}" ${job.detached ? "disabled" : ""}>重新分析</button>`
+        : `<button class="jc-locate-button" data-focus-key="${escapeAttr(job.key)}" ${job.detached ? "disabled" : ""}>定位</button>`}
+    </div>
+  `;
+  mountSalaryVisualClone(item, job);
+}
+
+function mountSalaryVisualClone(item, job) {
+  const slot = item.querySelector("[data-jc-salary-slot]");
+  const source = job.salaryNode;
+  if (!slot || !source?.isConnected) return;
+  const clone = source.cloneNode(true);
+  const sourceNodes = [source, ...Array.from(source.querySelectorAll("*"))];
+  const cloneNodes = [clone, ...Array.from(clone.querySelectorAll("*"))];
+  cloneNodes.forEach((node, index) => {
+    for (const attribute of Array.from(node.attributes || [])) {
+      if (/^on/i.test(attribute.name)
+          || ["id", "href", "src", "srcset", "target", "form", "action"].includes(attribute.name)) {
+        node.removeAttribute(attribute.name);
+      }
+    }
+    const original = sourceNodes[index];
+    if (!original) return;
+    const style = getComputedStyle(original);
+    node.style.fontFamily = style.fontFamily;
+    node.style.fontFeatureSettings = style.fontFeatureSettings;
+    node.style.fontVariationSettings = style.fontVariationSettings;
+  });
+  slot.replaceChildren(clone);
+}
+
+function installJobListEventDelegation(list) {
+  if (list.dataset.jcDelegated === "true") return;
+  list.dataset.jcDelegated = "true";
+  list.addEventListener("click", (event) => {
+    const button = event.target instanceof Element
+      ? event.target.closest("[data-focus-key], [data-retry-key]")
+      : null;
+    if (!button || !list.contains(button) || button.disabled) return;
+    if (button.dataset.focusKey) {
+      focusJob(button.dataset.focusKey);
+      return;
+    }
+    if (button.dataset.retryKey) {
       retryFailedJob(button.dataset.retryKey).catch((error) => {
         setStatus(`重新分析启动失败：${friendlyAiError(error?.message || error)}`);
         updateAutomationControls();
       });
-    });
+    }
   });
-  updateProgressSummary();
 }
 
 async function retryFailedJob(key) {
@@ -1858,11 +2004,34 @@ function isTransientAiError(error) {
   // Browser and service-worker fetch failures vary across Chromium platforms.
   // Treat network failures and truncated model JSON as retryable so the current
   // job stays pending instead of being skipped or allowing later communication.
-  return /Tunnel connection failed|Failed to fetch|NetworkError|network request failed|Load failed|ERR_(?:NETWORK|INTERNET|CONNECTION|TIMED_OUT)|503|502|504|请求超时|timeout|timed out|Service Unavailable|Bad Gateway|Gateway Timeout|Unexpected end of JSON input|unterminated JSON|JSON.*(?:incomplete|truncated)/i.test(String(error || ""));
+  return /Tunnel connection failed|Failed to fetch|NetworkError|network request failed|Load failed|ERR_(?:NETWORK|INTERNET|CONNECTION|TIMED_OUT)|429|503|502|504|请求超时|timeout|timed out|Too Many Requests|Service Unavailable|Bad Gateway|Gateway Timeout|Unexpected end of JSON input|unterminated JSON|JSON.*(?:incomplete|truncated)/i.test(String(error || ""));
 }
 
 function isExtensionContextError(error) {
   return /Extension context invalidated|context invalidated|receiving end does not exist|No SW/i.test(String(error || ""));
+}
+
+function aiErrorDiagnostic(error) {
+  const raw = String(error?.message || error || "");
+  const statusMatch = raw.match(/(?:status\s*[=:]\s*|HTTP\s+)(\d{3})/i);
+  const status = statusMatch ? Number(statusMatch[1]) : 0;
+  let category = "unknown";
+  if (/Tunnel connection failed|proxy tunnel|ERR_TUNNEL_CONNECTION_FAILED/i.test(raw)) category = "proxy";
+  else if (/Unexpected end of JSON input|unterminated JSON|JSON.*(?:incomplete|truncated)/i.test(raw)) category = "invalid_response";
+  else if (/请求超时|timeout|timed out|ERR_TIMED_OUT/i.test(raw)) category = "timeout";
+  else if (status === 401 || status === 403 || /Unauthorized|invalid.*key/i.test(raw)) category = "auth";
+  else if (status === 429 || /Too Many Requests|rate limit/i.test(raw)) category = "rate_limited";
+  else if ([502, 503, 504].includes(status) || /Service Unavailable|Bad Gateway|Gateway Timeout/i.test(raw)) category = "upstream_unavailable";
+  else if (/Failed to fetch|NetworkError|network request failed|Load failed|ERR_(?:NETWORK|INTERNET|CONNECTION)/i.test(raw)) category = "network";
+  else if (status >= 400) category = "provider_error";
+  const message = raw
+    .replace(/(Authorization\s*:\s*Bearer)\s+[^\s,;]+/gi, "$1 [REDACTED]")
+    .replace(/((?:api[-_ ]?key|x-api-key|x-goog-api-key)["']?\s*[:=]\s*["']?)[^\s,;"'}]+/gi, "$1[REDACTED]")
+    .replace(/([?&](?:key|api_key|token)=)[^&\s]+/gi, "$1[REDACTED]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 160);
+  return { category, status, message };
 }
 
 function stopForInvalidatedExtensionContext(job) {
@@ -1875,7 +2044,7 @@ function stopForInvalidatedExtensionContext(job) {
     JC_STATE.analyses.delete(job.key);
     setJobProgress(job, "attention", "扩展已更新，请刷新当前页面后继续");
   }
-  setStatus("扩展已重新加载，当前页面仍是旧脚本。请点击下方按钮刷新页面加载新版。");
+  setStatus("扩展已重新加载，当前页面仍是旧脚本。为保护当前职位列表，插件不会自动刷新；请使用浏览器刷新按钮手动加载新版。");
   renderList();
   updateAutomationControls();
 }
@@ -1885,16 +2054,26 @@ function friendlyAiError(error) {
   if (isExtensionContextError(text)) {
     return "扩展已更新，请刷新当前 BOSS 页面加载新版。";
   }
-  if (/Unexpected end of JSON input|unterminated JSON|JSON.*(?:incomplete|truncated)/i.test(text)) {
+  const diagnostic = aiErrorDiagnostic(text);
+  if (diagnostic.category === "invalid_response") {
     return "AI 服务返回内容不完整，已暂停并保留当前岗位；恢复后可从该岗位重新分析。";
   }
-  if (/请求超时|timeout|timed out/i.test(text)) {
+  if (diagnostic.category === "timeout") {
     return "AI 响应超时，已暂停并保留当前岗位；网络恢复后可从该岗位继续。";
   }
-  if (isTransientAiError(text)) {
-    return "AI 服务网络/代理暂时不可用，建议稍后重试；这不是岗位不匹配。";
+  if (diagnostic.category === "proxy") {
+    return "AI 代理通道连接失败，已暂停并保留当前岗位；请检查代理服务后重试。";
   }
-  if (/401|403|Unauthorized|invalid.*key/i.test(text)) {
+  if (diagnostic.category === "upstream_unavailable") {
+    return `AI 服务商暂时不可用${diagnostic.status ? `（HTTP ${diagnostic.status}）` : ""}，已暂停并保留当前岗位；这不代表本机代理故障。`;
+  }
+  if (diagnostic.category === "network") {
+    return "浏览器无法连接 AI 接口，可能是网络、接口域名权限或跨域限制；已暂停并保留当前岗位。";
+  }
+  if (diagnostic.category === "rate_limited") {
+    return "AI 服务请求频率受限（HTTP 429），已暂停并保留当前岗位；请稍后重试。";
+  }
+  if (diagnostic.category === "auth") {
     return "AI 服务的 API Key 或权限异常，请检查服务商、协议和 Key。";
   }
   return text || "AI 分析失败";
@@ -1955,13 +2134,17 @@ async function clickCommunicateForJob(job) {
 
 async function performIsolatedCommunication(expectedJob = {}) {
   const deadline = Date.now() + 12000;
+  let lastBlockCheckAt = 0;
   while (Date.now() < deadline) {
     const button = findCommunicationButtons(document)
       .find((item) => communicationButtonMatchesJob(item, expectedJob));
     if (!button) {
-      const blocked = communicationBlockStatus();
-      if (blocked) return blocked;
-      await sleep(100);
+      if (Date.now() - lastBlockCheckAt >= CONTACT_BLOCK_CHECK_MS) {
+        lastBlockCheckAt = Date.now();
+        const blocked = communicationBlockStatus();
+        if (blocked) return blocked;
+      }
+      await sleep(CONTACT_BUTTON_POLL_MS);
       continue;
     }
 
@@ -1983,7 +2166,7 @@ async function performIsolatedCommunication(expectedJob = {}) {
 }
 
 function communicationBlockStatus() {
-  const text = cleanText(document.body?.innerText || "");
+  const text = cleanText(document.body?.textContent || "");
   if (/安全验证|验证码|拖动滑块|滑块验证|访问异常|账号异常/.test(text)) return "blocked_security";
   if (/沟通.{0,8}(?:上限|额度|数量)|今日.{0,8}(?:沟通|招呼).{0,8}(?:上限|用完)|已达.{0,8}(?:沟通|招呼)/.test(text)) {
     return "blocked_limit";
@@ -2002,10 +2185,10 @@ async function selectJobDetail(job) {
 
   const targets = findJobCardActivationTargets(job.card);
   if (!targets.length) return false;
-  // BOSS versions differ: some bind selection to the whole card, while others
-  // bind it to the title or detail link. Try those real click surfaces in order.
+  // Trigger selection handlers while always cancelling an anchor's default
+  // navigation. The owner jobs tab must never become a detail/chat route.
   for (const target of targets) {
-    safeClick(target);
+    clickWithoutOwnerNavigation(target);
     for (let attempt = 0; attempt < 18; attempt += 1) {
       await sleep(100);
       if (detailMatchesJob(job)) return true;
@@ -2019,8 +2202,7 @@ async function selectJobDetail(job) {
 function findJobCardActivationTargets(card) {
   const nodes = [
     card,
-    card.querySelector(".job-name, .job-title, [class*='job-name'], [class*='job-title']"),
-    card.querySelector("a[href*='/job_detail/']")
+    card.querySelector(".job-name, [class*='job-name'], .job-title, [class*='job-title']")
   ].filter((node) => node && isElementVisible(node));
   const targets = [];
   for (const node of nodes) {
@@ -2028,6 +2210,17 @@ function findJobCardActivationTargets(card) {
     if (!targets.includes(target)) targets.push(target);
   }
   return targets;
+}
+
+function clickWithoutOwnerNavigation(node) {
+  if (!node) return false;
+  const anchor = node.closest?.("a[href]");
+  anchor?.addEventListener("click", (event) => event.preventDefault(), {
+    capture: true,
+    once: true
+  });
+  node.click();
+  return true;
 }
 
 function detailMatchesJob(job) {
@@ -2140,15 +2333,19 @@ async function requestAiAnalysis(job, payload) {
   try {
     const response = await sendMessage({ type: "analyzeJob", payload });
     const durationMs = Date.now() - startedAt;
+    const diagnosticDetail = response?.ok
+      ? ""
+      : `;diagnostic=${JSON.stringify(aiErrorDiagnostic(response?.error || "分析失败"))}`;
     logAutomationEvent(response?.ok ? "ai_analysis_completed" : "ai_analysis_failed", {
       job,
-      detail: `${baseDetail};durationMs=${durationMs};outcome=${response?.ok ? "ok" : "error"}`
+      detail: `${baseDetail};durationMs=${durationMs};outcome=${response?.ok ? "ok" : "error"}${diagnosticDetail}`
     });
     return response;
   } catch (error) {
+    const diagnostic = aiErrorDiagnostic(error);
     logAutomationEvent("ai_analysis_failed", {
       job,
-      detail: `${baseDetail};durationMs=${Date.now() - startedAt};outcome=message_error`
+      detail: `${baseDetail};durationMs=${Date.now() - startedAt};outcome=message_error;diagnostic=${JSON.stringify(diagnostic)}`
     });
     throw error;
   } finally {
@@ -2162,12 +2359,15 @@ function createStayOnCurrentPageWaiter(timeoutMs = 10000) {
   let observer = null;
   let intervalId = null;
   let timeoutId = null;
+  let probeTimer = null;
+  let lastProbeAt = 0;
   let resolvePromise = null;
 
   const cleanup = () => {
     observer?.disconnect();
     if (intervalId) clearInterval(intervalId);
     if (timeoutId) clearTimeout(timeoutId);
+    if (probeTimer) clearTimeout(probeTimer);
   };
   const finish = (result) => {
     if (settled) return;
@@ -2177,6 +2377,7 @@ function createStayOnCurrentPageWaiter(timeoutMs = 10000) {
   };
   const probe = () => {
     if (settled || confirmationClicked) return;
+    lastProbeAt = Date.now();
     if (isBossChatUrl(location.href)) {
       finish("chat_route");
       return;
@@ -2190,17 +2391,26 @@ function createStayOnCurrentPageWaiter(timeoutMs = 10000) {
     }
     if (hasSuccessfulContactEvidence()) finish("stayed");
   };
+  const scheduleProbe = (immediate = false) => {
+    if (settled || confirmationClicked || probeTimer) return;
+    const elapsed = Date.now() - lastProbeAt;
+    const delay = immediate ? 0 : Math.max(0, CONTACT_CONFIRMATION_MIN_INTERVAL_MS - elapsed);
+    probeTimer = setTimeout(() => {
+      probeTimer = null;
+      probe();
+    }, delay);
+  };
   const promise = new Promise((resolve) => {
     resolvePromise = resolve;
-    observer = new MutationObserver(probe);
+    observer = new MutationObserver(() => scheduleProbe());
     observer.observe(document.body || document.documentElement, {
       childList: true,
       subtree: true,
       characterData: true
     });
-    intervalId = setInterval(probe, 25);
+    intervalId = setInterval(scheduleProbe, CONTACT_CONFIRMATION_FALLBACK_MS);
     timeoutId = setTimeout(() => finish("stay_missing"), timeoutMs);
-    probe();
+    scheduleProbe(true);
   });
 
   return {
@@ -2219,8 +2429,9 @@ function hasSuccessfulContactEvidence() {
     return /^(继续沟通|继续聊|已沟通|发消息)$/.test(text);
   });
   if (changedControl) return true;
-  const pageText = cleanText(document.body?.innerText || "");
-  return /已向BOSS发送消息|消息发送成功|消息已发送|招呼已发送|已与BOSS沟通|已发起沟通/.test(pageText);
+  const statusNodes = Array.from(document.querySelectorAll(CONTACT_STATUS_SELECTOR));
+  return statusNodes.some((node) => /已向BOSS发送消息|消息发送成功|消息已发送|招呼已发送|已与BOSS沟通|已发起沟通/
+    .test(cleanText(node.textContent || "")));
 }
 
 function findStayOnCurrentPageButton() {
@@ -2236,8 +2447,7 @@ function findStayOnCurrentPageButton() {
 }
 
 function findCards() {
-  const selectors = [".job-card-wrapper", ".job-list-box li", "li[class*='job-card']", "div[class*='job-card']"];
-  for (const selector of selectors) {
+  for (const selector of JOB_CARD_SELECTORS) {
     const cards = Array.from(document.querySelectorAll(selector));
     if (cards.length > 0) return cards;
   }
@@ -2257,8 +2467,12 @@ function findCommunicationButtonForJob(job) {
 }
 
 function extractJobName(card, text) {
-  const node = card.querySelector(".job-name, .job-title, [class*='job-name'], [class*='job-title']");
-  const raw = cleanText(node?.innerText || "") || firstUsefulLine(card, text);
+  // querySelector with a comma returns DOM order, not selector priority. A
+  // broad job-title container may wrap both name and salary, so select the
+  // narrow name node first.
+  const selectors = [".job-name", "[class*='job-name']", ".job-title", "[class*='job-title']"];
+  const node = selectors.map((selector) => card.querySelector(selector)).find(Boolean);
+  const raw = cleanText(node?.textContent || "") || firstUsefulLine(card, text);
   return cleanTitleBase(raw).slice(0, 42) || "未知岗位";
 }
 
@@ -2269,19 +2483,121 @@ function buildDisplayTitle(jobName, salary, cardText) {
 
 function extractCompany(card, text) {
   const node = card.querySelector(".company-name, [class*='company']");
-  return cleanText(node?.innerText || "").slice(0, 40) || "";
+  return cleanText(node?.textContent || "").slice(0, 40) || "";
 }
 
 function extractSalaryInfo(card, text) {
   const node = findSalaryNode(card);
-  const raw = cleanText(node?.innerText || node?.textContent || "");
+  const raw = cleanText(node?.textContent || node?.innerText || "");
   const sourceText = raw || text;
-  const fontFamily = node ? getComputedStyle(node).fontFamily : "";
-  const normal = sourceText.match(/\d+\s*-\s*\d+\s*K/i) || sourceText.match(/\d+\s*-\s*\d+千/);
-  if (normal) return { text: normalizeDisplaySalary(sourceText) || normal[0], fontFamily };
-  const obfuscated = sourceText.match(/[█▉▊▋▌▍▎▏■\uE000-\uF8FF]{2,}\s*[-~—]\s*[█▉▊▋▌▍▎▏■\uE000-\uF8FF]{2,}\s*[Kk]?/);
-  if (obfuscated) return { text: normalizeDisplaySalary(sourceText) || obfuscated[0], fontFamily };
-  return { text: "", fontFamily };
+  const readable = findReadableSalaryMetadata(node)
+    || normalizeDisplaySalary(sourceText)
+    || findReadableSalaryInFrameworkState(card);
+  if (readable) return { text: readable, fontFamily: "", visualHtml: "", node };
+  if (node && /[Kk薪千]|[\u2200-\u22FF\u2500-\u259F\u25A0-\u25FF\uE000-\uF8FF]{2,}/.test(sourceText)) {
+    return {
+      text: sourceText,
+      fontFamily: "",
+      visualHtml: serializeSalaryVisual(node),
+      node
+    };
+  }
+  return { text: "", fontFamily: "", visualHtml: "", node: null };
+}
+
+function findReadableSalaryMetadata(node) {
+  if (!node) return "";
+  const nodes = [node, ...Array.from(node.querySelectorAll("*"))].slice(0, 40);
+  for (const current of nodes) {
+    for (const name of ["aria-label", "title", "data-salary", "data-text", "data-value", "data-original-title"]) {
+      const readable = normalizeDisplaySalary(current.getAttribute?.(name) || "");
+      if (readable) return readable;
+    }
+  }
+  return "";
+}
+
+function findReadableSalaryInFrameworkState(card) {
+  if (!card || (typeof card !== "object" && typeof card !== "function")) return "";
+  const signature = String(card.textContent || "").slice(0, 180);
+  const cached = frameworkSalaryCache.get(card);
+  if (cached?.signature === signature) return cached.salary;
+  let propertyNames = [];
+  try {
+    propertyNames = Object.getOwnPropertyNames(card);
+  } catch {
+    return "";
+  }
+  const roots = propertyNames
+    .filter((name) => /^__(?:vue|react)/i.test(name))
+    .map((name) => {
+      try {
+        return Object.getOwnPropertyDescriptor(card, name)?.value;
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+  const queue = roots.map((value) => ({ value, depth: 0 }));
+  const seen = new WeakSet();
+  let inspected = 0;
+  while (queue.length && inspected < 400) {
+    const current = queue.shift();
+    const value = current.value;
+    if (!value || (typeof value !== "object" && typeof value !== "function") || seen.has(value)) continue;
+    seen.add(value);
+    inspected += 1;
+    let descriptors;
+    try {
+      descriptors = Object.getOwnPropertyDescriptors(value);
+    } catch {
+      continue;
+    }
+    const entries = Object.entries(descriptors).filter(([, descriptor]) => "value" in descriptor);
+    entries.sort(([left], [right]) => {
+      const salaryKey = (name) => /salary|pay|wage|薪|compensation/i.test(name) ? 0 : 1;
+      return salaryKey(left) - salaryKey(right);
+    });
+    for (const [name, descriptor] of entries) {
+      const nested = descriptor.value;
+      if (typeof nested === "string" && nested.length <= 120
+          && /salary|pay|wage|薪|compensation/i.test(name)) {
+        const readable = normalizeDisplaySalary(nested);
+        if (readable) {
+          frameworkSalaryCache.set(card, { signature, salary: readable });
+          return readable;
+        }
+      } else if (current.depth < 4 && nested
+          && (typeof nested === "object" || typeof nested === "function")) {
+        queue.push({ value: nested, depth: current.depth + 1 });
+      }
+    }
+  }
+  frameworkSalaryCache.set(card, { signature, salary: "" });
+  return "";
+}
+
+function serializeSalaryVisual(node) {
+  if (!node) return "";
+  const serializeChildren = (parent, depth = 0) => {
+    if (depth > 6) return escapeHtml(parent.textContent || "");
+    return Array.from(parent.childNodes).map((child) => {
+      if (child.nodeType === Node.TEXT_NODE) return escapeHtml(child.textContent || "");
+      if (!(child instanceof Element)) return "";
+      const classes = Array.from(child.classList || [])
+        .filter((name) => /^[A-Za-z0-9_-]{1,80}$/.test(name))
+        .slice(0, 8)
+        .join(" ");
+      const classAttr = classes ? ` class="${classes}"` : "";
+      return `<span${classAttr}>${serializeChildren(child, depth + 1)}</span>`;
+    }).join("");
+  };
+  const rootClasses = Array.from(node.classList || [])
+    .filter((name) => /^[A-Za-z0-9_-]{1,80}$/.test(name))
+    .slice(0, 8)
+    .join(" ");
+  const classAttr = rootClasses ? ` ${rootClasses}` : "";
+  return `<span class="jc-salary-source${classAttr}">${serializeChildren(node)}</span>`;
 }
 
 function normalizeDisplaySalary(text) {
@@ -2289,8 +2605,6 @@ function normalizeDisplaySalary(text) {
   if (!value) return "";
   const salary = value.match(/\d+\s*[-~—]\s*\d+\s*[Kk](?:\s*[·,，、|｜/\\-]?\s*\d+\s*薪)?/);
   if (salary) return cleanText(salary[0].replace(/\s+/g, ""));
-  const obfuscated = value.match(/[█▉▊▋▌▍▎▏■\uE000-\uF8FF]{1,}\s*[-~—]\s*[█▉▊▋▌▍▎▏■\uE000-\uF8FF]{1,}\s*[Kk](?:\s*[·,，、|｜/\\-]?\s*[█▉▊▋▌▍▎▏■\uE000-\uF8FF\d]{1,}\s*薪)?/);
-  if (obfuscated) return cleanText(obfuscated[0].replace(/\s+/g, ""));
   return "";
 }
 
@@ -2303,32 +2617,39 @@ function findSalaryNode(card) {
   const selectors = [".salary", ".job-salary", "[class*='salary']", "[class*='Salary']", "[class*='red']"];
   for (const selector of selectors) {
     const node = card.querySelector(selector);
-    if (node && /[Kk千█▉▊▋▌▍▎▏■\uE000-\uF8FF]/.test(node.innerText || node.textContent || "")) return node;
+    if (node && /[Kk千薪█▉▊▋▌▍▎▏■\uE000-\uF8FF]/.test(node.textContent || "")) return node;
   }
   const nodes = Array.from(card.querySelectorAll("span,em,b,p,div"));
-  return nodes.find((node) => /[█▉▊▋▌▍▎▏■\uE000-\uF8FF]{2,}|[Kk]|千/.test(cleanText(node.innerText || node.textContent || ""))) || null;
+  return nodes.find((node) => /[█▉▊▋▌▍▎▏■\uE000-\uF8FF]{2,}|[Kk]|千|薪/.test(cleanText(node.textContent || ""))) || null;
 }
 
 function salaryForAi(text) {
-  const normal = text.match(/\d+\s*-\s*\d+\s*K/i) || text.match(/\d+\s*-\s*\d+千/);
-  return normal ? normal[0] : "";
+  const value = cleanText(text || "");
+  const normal = normalizeDisplaySalary(value);
+  if (normal) return normal;
+  return value ? `页面加密薪资：${value}` : "";
 }
 
 function renderTitleHtml(job) {
   const pieces = [escapeHtml(job.jobName || job.title)];
   const salary = normalizeDisplaySalary(job.salary) || normalizeDisplaySalary(findSalaryLine(job.text));
   if (salary) {
-    const style = job.salaryFontFamily ? ` style="font-family:${escapeAttr(job.salaryFontFamily)}"` : "";
-    pieces.push(`<span${style}>${escapeHtml(salary)}</span>`);
+    pieces.push(`<span class="jc-salary-text">${escapeHtml(salary)}</span>`);
+  } else if (job.salaryNode) {
+    pieces.push('<span class="jc-salary-source" data-jc-salary-slot="true"></span>');
+  } else if (job.salaryVisualHtml) {
+    pieces.push(job.salaryVisualHtml);
   }
   return pieces.join(" ");
 }
 
 function cleanTitleBase(text) {
   return cleanText(String(text || "")
-    .replace(/[█▉▊▋▌▍▎▏■\uE000-\uF8FF]{1,}\s*[-~—]\s*[█▉▊▋▌▍▎▏■\uE000-\uF8FF]{1,}\s*[Kk]?/g, "")
-    .replace(/[█▉▊▋▌▍▎▏■\uE000-\uF8FF]{1,}\s*薪/g, "")
-    .replace(/[█▉▊▋▌▍▎▏■\uE000-\uF8FF]{1,}/g, "")
+    .replace(/[\u2200-\u22FF\u2500-\u259F\u25A0-\u25FF\uE000-\uF8FF]{1,}\s*[.·\-~—]?\s*[\u2200-\u22FF\u2500-\u259F\u25A0-\u25FF\uE000-\uF8FF]{1,}\s*[Kk]?(?:\s*薪)?/g, "")
+    .replace(/[\u2200-\u22FF\u2500-\u259F\u25A0-\u25FF\uE000-\uF8FF]{1,}\s*薪/g, "")
+    .replace(/[\u2200-\u22FF\u2500-\u259F\u25A0-\u25FF\uE000-\uF8FF]{1,}/g, "")
+    .replace(/\s+(?=[^\s]*[^\p{L}\p{N}])\S+[Kk]\s*$/gu, "")
+    .replace(/\s+(?=[^\s]*[^\p{L}\p{N}])\S*薪\s*$/gu, "")
     .replace(/\d+\s*[-~—]\s*\d+\s*[Kk]/g, "")
     .replace(/\d+\s*薪/g, "")
     .replace(/[-~—]\s*[Kk]\b/g, "")
@@ -2336,9 +2657,8 @@ function cleanTitleBase(text) {
     .replace(/\s+[·,，、|｜/\\-]+/g, " "));
 }
 
-function extractRequirements(card, text) {
-  const lines = String(card.innerText || "").split(/\n+/).map((line) => cleanText(line)).filter(Boolean);
-  const candidates = lines.concat(text.split(/\s{2,}| · | 丨 |\|/).map((item) => cleanText(item)));
+function extractRequirements(text) {
+  const candidates = String(text || "").split(/\s{2,}| · | 丨 |\|/).map((item) => cleanText(item));
   const requirementParts = [];
   for (const item of candidates) {
     if (!item || requirementParts.includes(item)) continue;
@@ -2433,7 +2753,7 @@ function invalidateExtensionContext() {
   clearTimeout(sessionPersistTimer);
   sessionPersistTimer = null;
   const node = document.getElementById("jc-status");
-  if (node) node.textContent = "扩展已重新加载，请刷新当前职位页后继续。";
+  if (node) node.textContent = "扩展已重新加载，请刷新当前职位页后继续。为保护当前职位列表，插件不会自动刷新。";
   updateAutomationControls();
 }
 

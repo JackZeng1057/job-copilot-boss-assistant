@@ -27,6 +27,7 @@ const AI_REQUEST_TIMEOUT_MS = 90000;
 const ISOLATED_CONTACT_READY_TIMEOUT_MS = 15000;
 const ISOLATED_CONTACT_ACTION_TIMEOUT_MS = 30000;
 const automationStorage = chrome.storage.session || chrome.storage.local;
+const disposableContactTabIds = new Set();
 
 function consumeRuntimeLastError() {
   return chrome.runtime?.lastError || null;
@@ -285,9 +286,12 @@ async function communicateInIsolatedTab(senderTab, job) {
     url: workerUrl,
     active: false,
     windowId: senderTab.windowId,
+    openerTabId: senderTab.id,
     index: Number.isInteger(senderTab.index) ? senderTab.index + 1 : undefined
   });
   if (!worker?.id) throw new Error("无法创建后台沟通标签");
+  if (worker.id === senderTab.id) throw new Error("后台沟通标签身份异常，已停止以保护职位页");
+  disposableContactTabIds.add(worker.id);
   await setTabAutoDiscardable(worker.id, false);
   await appendAutomationLog({
     event: "isolated_contact_tab_opened",
@@ -326,8 +330,18 @@ async function communicateInIsolatedTab(senderTab, job) {
     return { status };
   } finally {
     await setTabAutoDiscardable(worker.id, true);
-    await removeTab(worker.id).catch(() => {});
+    await removeDisposableContactTab(worker.id, senderTab.id);
   }
+}
+
+async function removeDisposableContactTab(workerTabId, ownerTabId) {
+  if (!disposableContactTabIds.has(workerTabId) || workerTabId === ownerTabId) return false;
+  const tab = await getTab(workerTabId).catch(() => null);
+  if (!tab || tab.id !== workerTabId || tab.openerTabId !== ownerTabId) return false;
+  if (isAutomationJobsUrl(tab.url || "")) return false;
+  disposableContactTabIds.delete(workerTabId);
+  await removeTab(workerTabId).catch(() => {});
+  return true;
 }
 
 async function waitForIsolatedContactReady(tabId, timeoutMs) {
@@ -458,51 +472,9 @@ async function handleAutomationTabNavigation(tabId, url) {
   if (!session?.active || session.tabId !== tabId || !session.jobsUrl) return;
   if (isAutomationJobsUrl(url)) return;
 
-  if (session.contactInFlight && session.currentJobKey && isBossChatUrl(url)) {
-    const progress = {
-      ...(session.progress || {}),
-      [session.currentJobKey]: {
-        status: "contacted",
-        detail: "已点击沟通按钮，并从消息页返回原职位列表",
-        updatedAt: Date.now()
-      }
-    };
-    const completedJobKeys = Array.from(new Set([
-      ...(Array.isArray(session.completedJobKeys) ? session.completedJobKeys : []),
-      session.currentJobKey
-    ])).slice(-500);
-    const summary = {
-      ...(session.summary || {}),
-      contacted: Object.values(progress).filter((item) => item?.status === "contacted").length
-    };
-    await saveAutomationSession({
-      ...session,
-      progress,
-      completedJobKeys,
-      summary,
-      contactInFlight: false,
-      currentJobKey: "",
-      status: "BOSS 打开了消息页，插件正在返回原职位列表并继续。",
-      updatedAt: Date.now()
-    });
-
-    let restoreMethod = "go_back";
-    try {
-      await goBackTab(tabId);
-    } catch {
-      restoreMethod = "saved_jobs_url";
-      await updateTab(tabId, { url: session.jobsUrl });
-    }
-    await appendAutomationLog({
-      event: "contact_chat_navigation_restored",
-      page: url,
-      detail: `restore=${restoreMethod};to=${session.jobsUrl}`
-    }, tabId);
-    return;
-  }
-
   // Navigation unrelated to the one in-flight communication click remains a
-  // hard boundary: do not guess that the user intended automation to continue.
+  // hard boundary. Never drive browser history or reload the saved jobs URL:
+  // doing so can destroy BOSS's in-memory filters and the current result list.
   const progress = { ...(session.progress || {}) };
   if (session.contactInFlight && session.currentJobKey) {
     progress[session.currentJobKey] = {
@@ -518,14 +490,16 @@ async function handleAutomationTabNavigation(tabId, url) {
     progress,
     contactInFlight: false,
     currentJobKey: "",
-    status: "职位标签已离开职位页，自动投递已暂停；页面不会被自动刷新。",
+    status: isBossChatUrl(url)
+      ? "职位标签意外进入消息页，自动投递已暂停；插件不会自动返回或刷新，请手动点击浏览器返回按钮。"
+      : "职位标签已离开职位页，自动投递已暂停；页面不会被自动刷新。",
     updatedAt: Date.now()
   });
   await setTabAutoDiscardable(tabId, true);
   await appendAutomationLog({
     event: "automation_tab_navigation_paused",
     page: url,
-    detail: `restore=not_contact_chat;from=${session.jobsUrl}`
+    detail: `restore=none;from=${session.jobsUrl};enteredChat=${isBossChatUrl(url)}`
   }, tabId);
 }
 
@@ -592,14 +566,6 @@ function getTab(tabId) {
 
 function removeTab(tabId) {
   return new Promise((resolve, reject) => chrome.tabs.remove(tabId, () => {
-    const error = consumeRuntimeLastError();
-    if (error) reject(new Error(error.message));
-    else resolve();
-  }));
-}
-
-function goBackTab(tabId) {
-  return new Promise((resolve, reject) => chrome.tabs.goBack(tabId, () => {
     const error = consumeRuntimeLastError();
     if (error) reject(new Error(error.message));
     else resolve();

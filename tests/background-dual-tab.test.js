@@ -94,28 +94,19 @@ async function runNavigationScenario(contactInFlight, targetUrl = "https://www.z
   const saved = session.values.jobCopilotAutomationSessionV1;
   assert.equal(saved.batchNumber, 3);
   assert.deepEqual(Array.from(saved.batchKeys), [jobKey]);
-  if (contactInFlight && targetUrl.includes("/web/geek/chat")) {
-    assert.deepEqual(historyBackTabs, [7]);
-    assert.equal(updatedTabs.some((entry) => entry.changes.url), false);
-    assert.deepEqual(Array.from(saved.completedJobKeys), ["job:previous", jobKey]);
-    assert.equal(saved.active, true);
-    assert.equal(saved.paused, false);
+  assert.equal(historyBackTabs.length, 0,
+    "the extension must not drive browser history after the jobs tab navigates away");
+  assert.equal(updatedTabs.some((entry) => entry.changes.url), false,
+    "the extension must not reload a saved jobs URL after unexpected navigation");
+  assert.deepEqual(Array.from(saved.completedJobKeys), ["job:previous"]);
+  assert.equal(saved.active, false);
+  assert.equal(saved.paused, true);
+  assert.match(saved.status, /已暂停/);
+  if (contactInFlight) {
     assert.equal(saved.contactInFlight, false);
-    assert.equal(saved.progress[jobKey].status, "contacted");
-    assert.match(saved.status, /返回原职位列表/);
-  } else {
-    assert.equal(historyBackTabs.length, 0);
-    assert.equal(updatedTabs.some((entry) => entry.changes.url), false);
-    assert.deepEqual(Array.from(saved.completedJobKeys), ["job:previous"]);
-    assert.equal(saved.active, false);
-    assert.equal(saved.paused, true);
-    assert.match(saved.status, /已暂停/);
-    if (contactInFlight) {
-      assert.equal(saved.contactInFlight, false);
-      assert.equal(saved.progress[jobKey].status, "attention");
-    }
-    assert.equal(updatedTabs.at(-1).changes.autoDiscardable, true);
+    assert.equal(saved.progress[jobKey].status, "attention");
   }
+  assert.equal(updatedTabs.at(-1).changes.autoDiscardable, true);
 }
 
 async function runManualChatScenario(existingChatTab = null) {

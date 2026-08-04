@@ -2,6 +2,22 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 
 const source = fs.readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8");
+
+const selector = source.slice(
+  source.indexOf("async function selectJobDetail"),
+  source.indexOf("function findJobCardActivationTargets")
+);
+assert.match(selector, /clickWithoutOwnerNavigation\(target\)/,
+  "job selection must suppress link navigation in the owner jobs tab");
+assert.doesNotMatch(selector, /safeClick\(target\)/,
+  "job selection must never use an unrestricted click on a detail link");
+
+const activationTargets = source.slice(
+  source.indexOf("function findJobCardActivationTargets"),
+  source.indexOf("function detailMatchesJob")
+);
+assert.doesNotMatch(activationTargets, /a\[href\*=['\"]\/job_detail\//,
+  "the owner tab must not use a job-detail link as a fallback activation target");
 const helperStart = source.indexOf("function clickWithinDisposableTab(node)");
 const helperEnd = source.indexOf("function isElementVisible(node)", helperStart);
 const helperSource = source.slice(helperStart, helperEnd);

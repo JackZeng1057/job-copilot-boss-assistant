@@ -33,6 +33,36 @@ for (const message of [
   );
 }
 
+const diagnosticSource = contentSource.match(
+  /function aiErrorDiagnostic\(error\) \{[\s\S]*?\n\}/
+);
+assert.ok(diagnosticSource, "AI failures must produce a structured local diagnostic");
+const diagnosticSandbox = {};
+vm.runInNewContext(
+  `${diagnosticSource[0]}\nthis.aiErrorDiagnostic = aiErrorDiagnostic;`,
+  diagnosticSandbox
+);
+assert.equal(
+  diagnosticSandbox.aiErrorDiagnostic("AI request failed: status=503, body=overloaded").category,
+  "upstream_unavailable",
+  "provider 503 responses must not be mislabeled as a local proxy failure"
+);
+assert.equal(
+  diagnosticSandbox.aiErrorDiagnostic("Tunnel connection failed: proxy refused").category,
+  "proxy",
+  "actual proxy tunnel failures must remain distinguishable"
+);
+assert.equal(
+  diagnosticSandbox.aiErrorDiagnostic("Unexpected end of JSON input").category,
+  "invalid_response",
+  "truncated model output must remain distinguishable from connectivity failures"
+);
+assert.doesNotMatch(
+  diagnosticSandbox.aiErrorDiagnostic("Authorization: Bearer secret-token").message,
+  /secret-token/,
+  "diagnostic messages must redact credentials before local persistence"
+);
+
 for (const message of [
   "AI request failed: status=401",
   "invalid api key",
@@ -59,6 +89,11 @@ assert.match(
   contentSource,
   /const retryOnlyRun = Boolean\(JC_STATE\.retryJobKey\)[\s\S]*if \(retryOnlyRun\) \{[\s\S]*reason: "retry_completed"[\s\S]*自动投递保持暂停/,
   "retrying one failed job must not silently advance into another batch"
+);
+assert.match(
+  contentSource,
+  /ai_analysis_failed[\s\S]*aiErrorDiagnostic\([\s\S]*diagnostic=/,
+  "AI failure logs must persist the structured, redacted diagnostic"
 );
 
 console.log("AI failure recovery tests passed");

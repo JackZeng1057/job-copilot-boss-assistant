@@ -387,6 +387,33 @@
   -webkit-line-clamp: 2;
 }
 
+.jc-salary-source {
+  display: inline;
+  white-space: nowrap;
+}
+
+.jc-salary-source,
+.jc-salary-source * {
+  font-size: 12px !important;
+  font-style: inherit !important;
+  font-weight: inherit !important;
+  line-height: 1.35 !important;
+  letter-spacing: inherit !important;
+}
+
+.jc-salary-text {
+  display: inline;
+  font-family: inherit !important;
+  font-size: 12px !important;
+  font-style: inherit !important;
+  font-weight: inherit !important;
+  font-feature-settings: normal !important;
+  font-variation-settings: normal !important;
+  line-height: 1.35 !important;
+  letter-spacing: inherit !important;
+  white-space: nowrap;
+}
+
 .jc-job-meta,
 .jc-job-detail {
   overflow: hidden;
