@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const source = fs.readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8");
 const manifest = JSON.parse(fs.readFileSync(new URL("../manifest.json", `file://${__dirname}/`), "utf8"));
 
-assert.equal(manifest.version, "0.8.5", "performance release must use version 0.8.5");
+assert.equal(manifest.version, "0.9.0", "dismiss-job release must use version 0.9.0");
 assert.match(source, /const POST_ANALYSIS_CONTACT_DELAY_MS = 4000;/,
   "qualified jobs should wait four seconds before contact");
 assert.match(source, /const BETWEEN_JOBS_DELAY_MS = 6000;/,
@@ -47,6 +47,10 @@ const pipelineStarter = source.slice(
   source.indexOf("async function startAutoPipeline"),
   source.indexOf("async function registerAutomationSession")
 );
+assert.doesNotMatch(pipelineStarter, /window\.confirm\(/,
+  "pipeline startup must not require a second confirmation click");
+assert.match(source, /button\.textContent = "确认并开始自动投递";/,
+  "the single start button must make the one-click confirmation explicit");
 assert.match(pipelineStarter, /canReuseJobSnapshotForPipeline\(\)/,
   "pipeline startup must avoid an unconditional full rescan");
 assert.doesNotMatch(pipelineStarter, /synchronizePageContext\(\{ force: true/,

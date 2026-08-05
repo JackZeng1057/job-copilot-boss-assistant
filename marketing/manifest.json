@@ -1,6 +1,6 @@
 {
   "campaign": "Job Copilot 公开发布",
-  "version": "0.8.5",
+  "version": "0.9.0",
   "outputs": {
     "douyin": {
       "video": "exports/job-copilot-douyin-1080x1920.mp4",

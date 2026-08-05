@@ -2,6 +2,7 @@ const JC_STATE = {
   jobs: [],
   analyses: new Map(),
   jobProgress: new Map(),
+  dismissedJobKeys: new Set(),
   completedJobKeys: new Set(),
   selectedKey: "",
   currentJobKey: "",
@@ -16,6 +17,7 @@ const JC_STATE = {
   },
   pipeline: {
     active: false,
+    starting: false,
     mode: "idle",
     allPaused: false,
     contextInvalidated: false,
@@ -68,7 +70,7 @@ const KNOWN_JOB_CITIES = [
   "北京", "上海", "广州", "深圳", "杭州", "南京", "苏州", "成都", "重庆", "武汉", "西安", "天津",
   "长沙", "郑州", "青岛", "厦门", "合肥", "佛山", "东莞", "宁波", "无锡", "珠海", "福州"
 ];
-const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.8.5";
+const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.9.0";
 const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-isolated-contact-v2`;
 const RUNTIME_PROBE_EVENT = "job-copilot-runtime-probe";
 const RUNTIME_ACK_EVENT = "job-copilot-runtime-ack";
@@ -412,6 +414,10 @@ async function refreshAutomationSession() {
 
 function restoreOwnedAutomationSession(session) {
   if (!session) return;
+  JC_STATE.dismissedJobKeys = new Set(
+    (Array.isArray(session.dismissedJobKeys) ? session.dismissedJobKeys : []).slice(-MAX_COMPLETED_JOB_KEYS)
+  );
+  JC_STATE.jobs = JC_STATE.jobs.filter((job) => !JC_STATE.dismissedJobKeys.has(job.key));
   const currentKeys = new Set(JC_STATE.jobs.map((job) => job.key));
   const restoredAnalyses = Object.entries(session.analyses || {}).filter(([key]) => currentKeys.has(key));
   const restoredProgress = Object.entries(session.progress || {}).filter(([key]) => currentKeys.has(key));
@@ -597,7 +603,7 @@ async function handlePipelineControl() {
     updateAutomationControls();
     return;
   }
-  await startAutoPipeline({ confirmUser: true });
+  await startAutoPipeline();
 }
 
 function openPanel(panel, launcher) {
@@ -1184,6 +1190,11 @@ function updateAnalysisControls() {
     button.disabled = true;
     return;
   }
+  if (JC_STATE.pipeline.starting) {
+    button.textContent = "正在启动自动投递…";
+    button.disabled = true;
+    return;
+  }
   if (JC_STATE.pipeline.allPaused) {
     button.textContent = "继续自动投递";
     return;
@@ -1203,48 +1214,44 @@ function updateAnalysisControls() {
     button.disabled = true;
     return;
   }
-  button.textContent = "开始自动投递";
+  button.textContent = "确认并开始自动投递";
 }
 
-async function startAutoPipeline(options = {}) {
-  const confirmUser = options.confirmUser === true;
+async function startAutoPipeline() {
+  if (JC_STATE.pipeline.starting) return false;
   if (pageNeedsHuman()) {
     setStatus("页面疑似需要登录、验证码或安全验证，请先人工处理。");
     return false;
   }
-  if (!canReuseJobSnapshotForPipeline()) {
-    await synchronizePageContext({ source: "pipeline" });
-  }
-  if (!JC_STATE.jobs.length) {
-    setStatus("当前职位页没有识别到岗位，暂时不能启动自动投递。");
-    return false;
-  }
-  if (confirmUser) {
-    const locationRule = JC_STATE.settings.restrictTargetLocation
-      ? `AI 会把目标城市/地区作为硬性偏好，并仅沟通最终分达到 ${JC_STATE.settings.minScore} 分的岗位`
-      : `AI 会综合岗位实际地点，并仅沟通最终分达到 ${JC_STATE.settings.minScore} 分的岗位`;
-    const ok = window.confirm(
-      `确认开始连续自动投递？\n\n${locationRule}。每批最多 ${JOB_BATCH_SIZE} 个岗位；岗位达标后等待约 ${Math.round(POST_ANALYSIS_CONTACT_DELAY_MS / 1000)} 秒。新沟通会在不激活的临时标签中完成并立即关闭，职位列表标签不会进入消息页；已存在沟通的岗位直接记录，不再点击“继续沟通”。每个岗位结束后等待约 ${Math.round(BETWEEN_JOBS_DELAY_MS / 1000)} 秒，每批结束后等待 ${Math.round(BETWEEN_BATCHES_DELAY_MS / 1000)} 秒再加载后续岗位。`
-    );
-    if (!ok) return false;
-  }
-
-  if (!JC_STATE.pipeline.active || JC_STATE.pipeline.mode !== "auto") {
-    JC_STATE.pipeline.batchNumber = 1;
-    JC_STATE.pipeline.batchKeys = [];
-    JC_STATE.pipeline.waitingForNextBatch = false;
-    JC_STATE.pipeline.loadingNextBatch = false;
-  }
-  JC_STATE.pipeline.active = true;
-  JC_STATE.pipeline.mode = "auto";
-  JC_STATE.pipeline.allPaused = false;
-  JC_STATE.sessionOwner = true;
-  JC_STATE.remoteSession = null;
-  await registerAutomationSession();
-  setStatus("自动投递已启动：逐个分析岗位，达标后按保守节奏沟通并留在当前页。");
+  JC_STATE.pipeline.starting = true;
   updateAutomationControls();
-  ensureAnalysisWorker();
-  return true;
+  try {
+    if (!canReuseJobSnapshotForPipeline()) {
+      await synchronizePageContext({ source: "pipeline" });
+    }
+    if (!JC_STATE.jobs.length) {
+      setStatus("当前职位页没有识别到岗位，暂时不能启动自动投递。");
+      return false;
+    }
+    if (!JC_STATE.pipeline.active || JC_STATE.pipeline.mode !== "auto") {
+      JC_STATE.pipeline.batchNumber = 1;
+      JC_STATE.pipeline.batchKeys = [];
+      JC_STATE.pipeline.waitingForNextBatch = false;
+      JC_STATE.pipeline.loadingNextBatch = false;
+    }
+    JC_STATE.pipeline.active = true;
+    JC_STATE.pipeline.mode = "auto";
+    JC_STATE.pipeline.allPaused = false;
+    JC_STATE.sessionOwner = true;
+    JC_STATE.remoteSession = null;
+    await registerAutomationSession();
+    setStatus("自动投递已启动：逐个分析岗位，达标后按保守节奏沟通并留在当前页。");
+    ensureAnalysisWorker();
+    return true;
+  } finally {
+    JC_STATE.pipeline.starting = false;
+    updateAutomationControls();
+  }
 }
 
 function canReuseJobSnapshotForPipeline() {
@@ -1274,6 +1281,7 @@ function buildAutomationSessionPayload(overrides = {}) {
     fingerprint: JC_STATE.page.fingerprint,
     analyses: Object.fromEntries(JC_STATE.analyses),
     progress: Object.fromEntries(JC_STATE.jobProgress),
+    dismissedJobKeys: Array.from(JC_STATE.dismissedJobKeys).slice(-MAX_COMPLETED_JOB_KEYS),
     completedJobKeys: Array.from(JC_STATE.completedJobKeys).slice(-500),
     batchNumber: JC_STATE.pipeline.batchNumber,
     batchKeys: JC_STATE.pipeline.batchKeys.slice(0, JOB_BATCH_SIZE),
@@ -1629,11 +1637,19 @@ async function waitForStableJobSnapshot() {
 function applyJobSnapshot(snapshot, options = {}) {
   const previousJobs = JC_STATE.jobs;
   const initialized = JC_STATE.page.initialized;
-  const overlap = jobKeyOverlap(previousJobs, snapshot.jobs);
+  const previousJobsForOverlap = previousJobs.concat(
+    Array.from(JC_STATE.dismissedJobKeys, (key) => ({ key }))
+  );
+  const overlap = jobKeyOverlap(previousJobsForOverlap, snapshot.jobs);
   // BOSS updates category/search results without a full navigation. Low key
   // overlap means this is a new page context, so late work from the old context
   // must be invalidated before any new result can be rendered or contacted.
   const pageReplaced = initialized && previousJobs.length > 0 && snapshot.jobs.length > 0 && overlap < 0.35;
+  const visibleSnapshot = {
+    ...snapshot,
+    jobs: snapshot.jobs.filter((job) => !JC_STATE.dismissedJobKeys.has(job.key))
+  };
+  snapshot = visibleSnapshot;
 
   if (!initialized || pageReplaced) {
     const restartMode = JC_STATE.pipeline.active && JC_STATE.pipeline.mode === "auto"
@@ -1733,7 +1749,7 @@ function invalidateCurrentPageWork() {
 function restartPipelineForGeneration(mode, generation) {
   setTimeout(() => {
     if (JC_STATE.page.generation !== generation || JC_STATE.pipeline.allPaused) return;
-    if (mode === "auto") startAutoPipeline({ confirmUser: false });
+    if (mode === "auto") startAutoPipeline();
   }, 300);
 }
 
@@ -1834,6 +1850,7 @@ function updateJobRow(item, job) {
     : "";
   const progress = progressFor(job);
   const progressInfo = jobProgressInfo(progress.status);
+  const dismissalDisabled = progress.status === "contacting";
   const meta = [job.company, job.city, job.requirements].filter(Boolean).slice(0, 2).join(" · ");
   const renderSignature = JSON.stringify([
     job.index, job.title, job.jobName, job.salary, job.salaryFontFamily, meta, job.detached,
@@ -1851,7 +1868,13 @@ function updateJobRow(item, job) {
       ${progress.detail ? `<div class="jc-job-detail">${escapeHtml(progress.detail)}</div>` : ""}
     </div>
     <div class="jc-job-result">
-      <span class="jc-progress-chip is-${progressInfo.tone}">${progressInfo.label}</span>
+      <div class="jc-job-result-heading">
+        <span class="jc-progress-chip is-${progressInfo.tone}">${progressInfo.label}</span>
+        <button class="jc-dismiss-job" type="button" data-dismiss-key="${escapeAttr(job.key)}"
+          aria-label="关闭检测：${escapeAttr(job.title)}"
+          title="${dismissalDisabled ? "正在沟通，暂时无法关闭" : "关闭检测并移出投递列表"}"
+          ${dismissalDisabled ? "disabled" : ""}>×</button>
+      </div>
       <span class="jc-score">${score === "--" ? "" : `${escapeHtml(String(score))} 分`}</span>
       ${progress.status === "error"
         ? `<button class="jc-locate-button jc-retry-button" data-retry-key="${escapeAttr(job.key)}" ${job.detached ? "disabled" : ""}>重新分析</button>`
@@ -1859,6 +1882,47 @@ function updateJobRow(item, job) {
     </div>
   `;
   mountSalaryVisualClone(item, job);
+}
+
+function dismissJob(key) {
+  const job = JC_STATE.jobs.find((item) => item.key === key);
+  if (!job) return false;
+  const progress = progressFor(job);
+  if (progress.status === "contacting") {
+    setStatus(`正在沟通，暂时无法关闭：${job.title}`);
+    return false;
+  }
+
+  const interruptsCurrentRun = progress.status === "analyzing"
+    || progress.status === "qualified"
+    || JC_STATE.currentJobKey === key;
+  JC_STATE.dismissedJobKeys.add(key);
+  rememberCompletedJobKey(key);
+  JC_STATE.jobs = JC_STATE.jobs
+    .filter((item) => item.key !== key)
+    .map((item, index) => ({ ...item, index }));
+  JC_STATE.analyses.delete(key);
+  JC_STATE.jobProgress.delete(key);
+  JC_STATE.pipeline.batchKeys = JC_STATE.pipeline.batchKeys.filter((item) => item !== key);
+  if (JC_STATE.retryJobKey === key) JC_STATE.retryJobKey = "";
+  if (JC_STATE.selectedKey === key) {
+    JC_STATE.selectedKey = "";
+    clearHighlights();
+  }
+  if (JC_STATE.currentJobKey === key) JC_STATE.currentJobKey = "";
+  if (interruptsCurrentRun) {
+    JC_STATE.analysisRunId += 1;
+    JC_STATE.analyzing = false;
+  }
+
+  setStatus(`已关闭检测并移出投递列表：${job.title}`);
+  renderList();
+  updateAutomationControls();
+  schedulePersistAutomationSession();
+  if (interruptsCurrentRun && JC_STATE.pipeline.active && !JC_STATE.pipeline.allPaused) {
+    setTimeout(ensureAnalysisWorker, 0);
+  }
+  return true;
 }
 
 function mountSalaryVisualClone(item, job) {
@@ -1890,9 +1954,13 @@ function installJobListEventDelegation(list) {
   list.dataset.jcDelegated = "true";
   list.addEventListener("click", (event) => {
     const button = event.target instanceof Element
-      ? event.target.closest("[data-focus-key], [data-retry-key]")
+      ? event.target.closest("[data-focus-key], [data-retry-key], [data-dismiss-key]")
       : null;
     if (!button || !list.contains(button) || button.disabled) return;
+    if (button.dataset.dismissKey) {
+      dismissJob(button.dataset.dismissKey);
+      return;
+    }
     if (button.dataset.focusKey) {
       focusJob(button.dataset.focusKey);
       return;
@@ -2086,7 +2154,7 @@ function focusNextQualifiedJob() {
   const next = ordered.find((job) => {
     const analysis = JC_STATE.analyses.get(job.key);
     return !job.detached && analysis && Number(analysis.score) >= JC_STATE.settings.minScore;
-  }) || ordered.find((job) => !job.detached);
+  });
   if (next) focusJob(next.key);
   else setStatus("当前页没有可定位的达标岗位。");
 }

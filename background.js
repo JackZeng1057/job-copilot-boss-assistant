@@ -185,7 +185,7 @@ function sanitizeAutomationSession(value) {
   const safe = {};
   const allowed = [
     "tabId", "active", "paused", "mode", "jobsUrl", "fingerprint", "analyses", "progress",
-    "summary", "status", "contactInFlight", "currentJobKey", "completedJobKeys",
+    "summary", "status", "contactInFlight", "currentJobKey", "dismissedJobKeys", "completedJobKeys",
     "batchNumber", "batchKeys", "updatedAt", "autoPausedByIdle"
   ];
   for (const key of allowed) {
