@@ -13,7 +13,6 @@ for (const type of [
   "getAutomationSession",
   "focusAutomationTab",
   "openManualChatTab",
-  "communicateInIsolatedTab",
   "controlAutomationTab",
   "appendAutomationLog"
 ]) {
@@ -25,5 +24,15 @@ for (const type of [
     `${type} must answer rejected promises instead of closing the async message channel`);
   assert.match(branch, /return true;/, `${type} async branch must keep the message channel open`);
 }
+
+const isolatedBranchStart = listener.indexOf('message?.type === "communicateInIsolatedTab"');
+assert.ok(isolatedBranchStart >= 0, "legacy isolated communication branch must exist");
+const isolatedBranchEnd = listener.indexOf("message?.type ===", isolatedBranchStart + 20);
+const isolatedBranch = listener.slice(isolatedBranchStart,
+  isolatedBranchEnd >= 0 ? isolatedBranchEnd : listener.length);
+assert.match(isolatedBranch, /isolated_detail_tabs_disabled/,
+  "legacy isolated communication must be rejected so it cannot create a detail tab");
+assert.match(isolatedBranch, /return false;/,
+  "disabled isolated communication must not keep an async channel open");
 
 console.log("Background async message response tests passed");

@@ -19,7 +19,31 @@ const repaired = sandbox.parseJson(`{
 assert.equal(repaired.score, 73);
 assert.equal(repaired.greeting, "第一行\n第二行\t继续");
 
-assert.match(source, /catch \(firstError\)[\s\S]*buildJsonRepairPrompt\(raw, firstError\)[\s\S]*parseJson\(repairedRaw\)/,
-  "an unrecoverable model response must receive one JSON-only repair request");
+const commonMalformedCases = [
+  `分析结果如下：\n\`\`\`json\n{
+    "score": 71,
+    "decision": "recommend",
+    "reasons": ["匹配",],
+  }\n\`\`\``,
+  `{score: 68, decision: 'manual_review', excluded: False,
+    reasons: ['方向匹配', '经验待确认']}`,
+  `{"score": 66, "decision": "manual_review", "reasons": ["包含 } 符号", "第二条"]} 后续解释`,
+  `{"score": 64, "decision": "manual_review", "reasons": ["输出在这里被截断`
+];
+
+for (const malformed of commonMalformedCases) {
+  const value = sandbox.parseJson(malformed);
+  assert.ok(Number.isFinite(Number(value.score)), `score must survive local repair: ${malformed}`);
+  assert.ok(["recommend", "manual_review", "skip"].includes(value.decision));
+  assert.ok(Array.isArray(value.reasons));
+}
+
+const booleanRepair = sandbox.parseJson(`{score: 62, decision: 'manual_review', excluded: false,
+  reasons: [], risks: []}`);
+assert.equal(booleanRepair.excluded, false,
+  "local syntax repair must preserve JSON booleans instead of converting them to strings");
+
+assert.match(source, /catch \(firstError\)[\s\S]*不会发起二次修复请求/,
+  "an unrecoverable structured response must fail without another model request");
 
 console.log("AI JSON repair tests passed");

@@ -538,6 +538,14 @@
   font-weight: 700;
 }
 
+.jc-job-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  white-space: nowrap;
+}
+
 .jc-locate-button {
   border: 0;
   background: transparent;

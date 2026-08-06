@@ -18,14 +18,24 @@ const contact = source.slice(contactStart, contactEnd);
 assert.ok(contactStart >= 0 && contactEnd > contactStart, "owner-tab contact coordinator must exist");
 assert.match(contact, /await selectJobDetail\(job\)/,
   "the requested job must be selected before dispatching background communication");
-assert.match(contact, /type:\s*["']communicateInIsolatedTab["']/,
-  "new communication must be delegated to an isolated background tab");
-assert.match(contact, /\^\(继续沟通\|继续聊\)\$/,
+assert.match(contact, /communicateOnOwnerPage\(job/,
+  "new communication must run on the visible owner jobs page");
+assert.doesNotMatch(contact, /communicateInIsolatedTab/,
+  "automatic communication must not create a separate detail tab");
+assert.match(contact, /\^\(继续沟通\|继续聊\|再次沟通\)\$/,
   "existing conversations must be recognized without entering chat");
 assert.match(contact, /existing_conversation_skipped[\s\S]*return ["']already_contacted["']/,
   "existing conversations must be recorded without clicking the chat control");
-assert.doesNotMatch(contact, /clickWithoutNavigation|\.click\s*\(/,
-  "the owner jobs tab must never click a control that can navigate to chat");
+assert.match(contact, /createStayOnCurrentPageWaiter/,
+  "owner-page communication must wait for the BOSS stay-on-page dialog");
+assert.match(contact, /clickOnOwnerPage\(button\)/,
+  "owner-page communication must use the contained click path");
+assert.match(contact, /const ownerJobsUrl = location\.href/,
+  "automatic communication must retain the exact owner jobs URL before clicking");
+assert.match(contact, /(?:chat_route|isBossChatUrl)[\s\S]*restoreManualOwnerJobsRoute\(ownerJobsUrl\)/,
+  "automatic communication must restore a chat/detail escape instead of relying on one background check");
+assert.doesNotMatch(contact, /communicateInHiddenFrame|communicateInIsolatedTab/,
+  "automatic communication must not use hidden or isolated detail tabs");
 assert.doesNotMatch(contact, /updateContactSession/,
   "the owner tab must not be marked as an in-flight navigation target");
 
@@ -37,9 +47,11 @@ assert.equal((worker.match(/clickWithinDisposableTab\(button\)/g) || []).length,
   "the disposable tab may click the immediate-contact button exactly once");
 assert.doesNotMatch(worker, /dispatchCommunicationRetryClick|clickAttempt/,
   "a timeout must never trigger a second communication click");
-assert.match(worker, /\^\(继续沟通\|继续聊\)\$[\s\S]*return ["']already_contacted["']/,
+assert.match(worker, /\^\(继续沟通\|继续聊\|再次沟通\)\$[\s\S]*return ["']already_contacted["']/,
   "a worker that discovers an existing conversation must also avoid clicking");
 assert.match(source, /function clickWithinDisposableTab[\s\S]*setAttribute\(["']target["'],\s*["']_self["']\)/,
   "a link-style communication control must be contained in the inactive worker tab");
+assert.match(source, /stayed_confirmed/,
+  "a success dialog followed by staying on the jobs page must be a first-class confirmed outcome");
 
 console.log("Current-page communication button tests passed");

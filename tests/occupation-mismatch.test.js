@@ -49,7 +49,9 @@ const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/
           occupation_family: excludedSales ? "电话销售" : "电话客服/客户服务",
           target_alignment: directCustomerService ? "direct" : "unrelated",
           reasons: ["fixture"],
-          location_fit: "acceptable"
+          risks: [],
+          location_fit: "acceptable",
+          greeting: "您好，希望进一步沟通岗位。"
         }) } }]
       })
     };

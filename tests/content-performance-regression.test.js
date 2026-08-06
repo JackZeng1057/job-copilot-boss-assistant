@@ -4,11 +4,11 @@ const fs = require("node:fs");
 const source = fs.readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8");
 const manifest = JSON.parse(fs.readFileSync(new URL("../manifest.json", `file://${__dirname}/`), "utf8"));
 
-assert.equal(manifest.version, "0.9.0", "dismiss-job release must use version 0.9.0");
-assert.match(source, /const POST_ANALYSIS_CONTACT_DELAY_MS = 4000;/,
-  "qualified jobs should wait four seconds before contact");
-assert.match(source, /const BETWEEN_JOBS_DELAY_MS = 6000;/,
-  "jobs should use a six-second pacing delay");
+assert.equal(manifest.version, "0.9.5", "navigation and throughput release must use version 0.9.5");
+assert.match(source, /const POST_ANALYSIS_CONTACT_DELAY_MS = 3000;/,
+  "qualified jobs should wait three seconds before communication");
+assert.match(source, /const BETWEEN_JOBS_DELAY_MS = 5000;/,
+  "jobs should retain a five-second anti-rate-limit pacing delay");
 
 const waiter = source.slice(
   source.indexOf("function createStayOnCurrentPageWaiter"),

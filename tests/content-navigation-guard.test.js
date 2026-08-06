@@ -7,10 +7,17 @@ const selector = source.slice(
   source.indexOf("async function selectJobDetail"),
   source.indexOf("function findJobCardActivationTargets")
 );
-assert.match(selector, /clickWithoutOwnerNavigation\(target\)/,
+assert.match(selector, /await clickWithoutOwnerNavigation\(target, ownerJobsUrl\)/,
   "job selection must suppress link navigation in the owner jobs tab");
+assert.match(selector, /restoreOwnerJobsRoute\(ownerJobsUrl\)/,
+  "job selection must detect a delayed BOSS SPA route escape while waiting for the detail pane");
+assert.match(selector, /OWNER_NAVIGATION_GUARD_START_EVENT[\s\S]*try\s*\{[\s\S]*finally[\s\S]*OWNER_NAVIGATION_GUARD_STOP_EVENT/,
+  "job selection must keep the main-world SPA route lock active for the entire simulated card click");
 assert.doesNotMatch(selector, /safeClick\(target\)/,
   "job selection must never use an unrestricted click on a detail link");
+assert.match(source,
+  /if \(JC_STATE\.pipeline\.ownerRouteEscaped\)[\s\S]*reason: "owner_route_escape"/,
+  "the analysis loop must preserve the route-escape warning instead of overwriting it as a normal pause");
 
 const activationTargets = source.slice(
   source.indexOf("function findJobCardActivationTargets"),
@@ -34,10 +41,16 @@ const originalContact = source.slice(
 );
 assert.match(originalContact, /findCommunicationButtonForJob\(job\)/,
   "the current job detail must provide the communication control");
-assert.match(originalContact, /communicateInIsolatedTab/,
-  "automatic communication must delegate navigation-capable work to a disposable tab");
-assert.doesNotMatch(originalContact, /clickWithoutNavigation\(button\)|dispatchCommunicationRetryClick/,
-  "the jobs tab must never click a communication control or retry a click");
+assert.match(originalContact, /communicateOnOwnerPage\(job/,
+  "automatic communication must run on the visible owner jobs page");
+assert.doesNotMatch(originalContact, /communicateInIsolatedTab/,
+  "automatic communication must not create a separate detail tab");
+assert.match(originalContact, /createStayOnCurrentPageWaiter/,
+  "the jobs tab must wait for the native BOSS confirmation dialog");
+assert.match(source, /function clickOnOwnerPage[\s\S]*\/web\\\/geek\\\/chat/,
+  "communication links must be prevented from opening a chat tab");
+assert.doesNotMatch(originalContact, /communicateInHiddenFrame|communicateInIsolatedTab/,
+  "the jobs tab must not delegate communication to a detail tab");
 const manualChatHandler = source.slice(
   source.indexOf("function installManualChatTabHandler"),
   source.indexOf("function isTrustedTopNavigationChatClick", source.indexOf("function installManualChatTabHandler"))
@@ -64,5 +77,9 @@ assert.match(source, /job-copilot-message-overlay[\s\S]*stopImmediatePropagation
   "the native overlay must stop BOSS's SPA click handler without preventing its own default action");
 assert.match(source, /addEventListener\(["']pointerdown["'],\s*handleManualChatHitboxEvent,\s*true\)/,
   "the message hitbox must intercept pointer input before the BOSS route handler");
+assert.match(source, /type:\s*["']protectJobsTab["']/,
+  "every jobs-page runtime must register a persistent owner-tab navigation guard");
+assert.match(source, /function registerJobsTabProtection\(\)[\s\S]*persistent:\s*true[\s\S]*protectJobsTab/,
+  "the jobs document must arm the main-world route guard for its full lifetime");
 assert.doesNotMatch(source, /clickWithoutJavascriptUrl/);
 console.log("Current-page content navigation regression test passed");

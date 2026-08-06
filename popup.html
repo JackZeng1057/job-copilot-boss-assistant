@@ -299,6 +299,13 @@
     <label>模型 ID</label>
     <input id="model" placeholder="例如 deepseek-v4-flash；可填写该服务商任意文本模型" />
     <div class="note">模型列表不写死在插件里；填写服务商文档中的模型 ID 即可。</div>
+    <label for="analysisSpeed">分析速度模式</label>
+    <select id="analysisSpeed">
+      <option value="fast">极速（关闭或最低推理）</option>
+      <option value="balanced">平衡（少量推理）</option>
+      <option value="accurate">精确（默认或较高推理）</option>
+    </select>
+    <div class="note">插件会按服务商和模型安全映射；不支持的模型不会收到额外推理参数。</div>
     <details class="api-advanced" id="apiAdvanced">
       <summary>自定义接口（高级）</summary>
       <div class="api-advanced-body">
@@ -342,6 +349,21 @@
     <div class="section-body">
     <label>目标城市/通勤回答</label>
     <input id="currentLocation" placeholder="例如：北京海淀、广州天河、远程均可" />
+    <div class="grid">
+      <div>
+        <label for="experienceYears">工作经验年限</label>
+        <input id="experienceYears" type="number" min="0" max="50" step="0.5" placeholder="可留空" />
+      </div>
+      <div>
+        <label for="graduateStatus">是否应届</label>
+        <select id="graduateStatus">
+          <option value="unspecified">未设置</option>
+          <option value="graduate">应届生</option>
+          <option value="experienced">非应届生</option>
+        </select>
+      </div>
+    </div>
+    <div class="note">用于对照 JD 中“经验不限、3-5 年、应届”等要求，只占较低评分比重；留空或未设置时由 AI 根据简历谨慎判断。</div>
     <label>目标方向/关键词（逗号分隔）</label>
     <textarea id="targetDirections" placeholder="例如：产品运营,数据分析,市场策划,客户成功"></textarea>
     <label>绝不投递岗位/职业类型（逗号分隔）</label>

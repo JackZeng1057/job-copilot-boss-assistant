@@ -195,7 +195,7 @@
       runtime: {
         id: "job-copilot-local-demo",
         lastError: null,
-        getManifest: () => ({ version: "0.9.0" }),
+        getManifest: () => ({ version: "0.9.5" }),
         onMessage: { addListener() {} },
         sendMessage(message, callback) {
           if (message.type === "getSettings") {
@@ -207,6 +207,9 @@
                 restrictTargetLocation: false,
                 profile: "demo",
                 currentLocation: "上海",
+                experienceYears: "3",
+                graduateStatus: "unspecified",
+                analysisSpeed: "balanced",
                 targetDirections: "AI 产品、AI 应用、前端开发、软件测试",
                 excludedDirections: "电话销售、直播运营",
                 customInstructions: "应届岗位优先，重视项目证据与岗位内容",

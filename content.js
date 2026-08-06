@@ -1,6 +1,8 @@
 const JC_STATE = {
   jobs: [],
   analyses: new Map(),
+  analysisPayloads: new Map(),
+  reanalysisInFlightKeys: new Set(),
   jobProgress: new Map(),
   dismissedJobKeys: new Set(),
   completedJobKeys: new Set(),
@@ -19,19 +21,28 @@ const JC_STATE = {
     active: false,
     starting: false,
     mode: "idle",
+    phase: "idle",
     allPaused: false,
+    pauseReason: "",
+    controlActionInFlight: false,
+    ownerRouteEscaped: false,
     contextInvalidated: false,
     batchNumber: 1,
     batchKeys: [],
+    batchSize: 0,
+    batchWaitRemainingMs: 0,
     waitingForNextBatch: false,
     loadingNextBatch: false
   },
   settings: {
     minScore: 60,
+    analysisSpeed: "fast",
     autoRunOnJobsPage: false,
     restrictTargetLocation: false,
     profile: "default",
     currentLocation: "",
+    experienceYears: "",
+    graduateStatus: "unspecified",
     targetDirections: "",
     excludedDirections: "",
     customInstructions: "",
@@ -52,8 +63,9 @@ const CONTACT_BUTTON_POLL_MS = 250;
 const CONTACT_BLOCK_CHECK_MS = 750;
 const CONTACT_CONFIRMATION_MIN_INTERVAL_MS = 250;
 const CONTACT_CONFIRMATION_FALLBACK_MS = 500;
-const POST_ANALYSIS_CONTACT_DELAY_MS = 4000;
-const BETWEEN_JOBS_DELAY_MS = 6000;
+const HIDDEN_CONTACT_FRAME_TIMEOUT_MS = 15000;
+const POST_ANALYSIS_CONTACT_DELAY_MS = 3000;
+const BETWEEN_JOBS_DELAY_MS = 5000;
 const JOB_BATCH_SIZE = 15;
 const BETWEEN_BATCHES_DELAY_MS = 60000;
 const MAX_DETACHED_JOBS = 50;
@@ -70,10 +82,12 @@ const KNOWN_JOB_CITIES = [
   "北京", "上海", "广州", "深圳", "杭州", "南京", "苏州", "成都", "重庆", "武汉", "西安", "天津",
   "长沙", "郑州", "青岛", "厦门", "合肥", "佛山", "东莞", "宁波", "无锡", "珠海", "福州"
 ];
-const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.9.0";
-const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-isolated-contact-v2`;
+const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.9.5";
+const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-manual-contact-v5`;
 const RUNTIME_PROBE_EVENT = "job-copilot-runtime-probe";
 const RUNTIME_ACK_EVENT = "job-copilot-runtime-ack";
+const OWNER_NAVIGATION_GUARD_START_EVENT = "job-copilot-owner-navigation-guard-start";
+const OWNER_NAVIGATION_GUARD_STOP_EVENT = "job-copilot-owner-navigation-guard-stop";
 let pageSyncTimer = null;
 let pageSyncRunning = false;
 let pageSyncRequested = false;
@@ -82,6 +96,9 @@ let sessionPersistTimer = null;
 let manualChatScanTimer = null;
 let manualChatHitbox = null;
 let manualChatOpenAt = 0;
+let hiddenContactFrame = null;
+const manualContactInFlightKeys = new Set();
+const trustedManualContactEvents = new WeakSet();
 const frameworkSalaryCache = new WeakMap();
 
 const SHOULD_BOOT_CONTENT_RUNTIME = !hasLiveContentRuntime();
@@ -89,6 +106,15 @@ if (SHOULD_BOOT_CONTENT_RUNTIME) {
   initPanel();
   installManualChatTabHandler(true);
   installContentRuntimeResponder();
+  registerJobsTabProtection();
+}
+
+function registerJobsTabProtection() {
+  if (!isJobsPage()) return;
+  document.dispatchEvent(new CustomEvent(OWNER_NAVIGATION_GUARD_START_EVENT, {
+    detail: { persistent: true }
+  }));
+  sendMessage({ type: "protectJobsTab" }).catch(() => {});
 }
 
 function hasLiveContentRuntime() {
@@ -122,6 +148,8 @@ function installManualChatTabHandler(force = false) {
   window.addEventListener("pointerdown", handleManualChatHitboxEvent, true);
   window.addEventListener("click", handleManualChatHitboxEvent, true);
   document.addEventListener("click", handleManualChatClick, true);
+  document.addEventListener("click", handleManualJobContactClick, true);
+  document.addEventListener("click", containTrustedManualContactNavigation, false);
 }
 
 function scheduleManualChatLinkHardening() {
@@ -150,6 +178,133 @@ function handleManualChatHitboxEvent(event) {
 function handleManualChatClick(event) {
   if (!isTrustedTopNavigationChatClick(event) || !isJobsPage()) return;
   openManualChatCompanion(event);
+}
+
+function handleManualJobContactClick(event) {
+  if (!event.isTrusted || !isJobsPage() || !(event.target instanceof Element)) return false;
+  const button = event.target.closest("a,button,[role='button']");
+  if (!button || isInsideJobCopilot(button)) return false;
+  const label = cleanText(button.innerText || button.textContent || "");
+  if (!/^(立即沟通|继续沟通|继续聊|再次沟通)$/.test(label)) return false;
+  const job = findJobForCommunicationButton(button);
+  if (!job) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (/^(继续沟通|继续聊|再次沟通)$/.test(label)) {
+      openExistingConversationInCompanion();
+    } else {
+      setStatus("无法确认当前沟通按钮对应的队列岗位，已阻止页面跳转；请重新扫描后再试。");
+    }
+    return true;
+  }
+  if (manualContactInFlightKeys.has(job.key)) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return true;
+  }
+  if (/^(继续沟通|继续聊|再次沟通)$/.test(label)) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    openExistingConversationInCompanion(job);
+    return true;
+  }
+  // Keep the user's original trusted event alive so BOSS can execute its real
+  // communication handler. Synthetic element.click() is not an equivalent
+  // substitute and can be ignored by production event guards.
+  trustedManualContactEvents.add(event);
+  // Arm the main-world guard synchronously, before BOSS's delegated handler
+  // receives the trusted click. This blocks both SPA history writes and a
+  // target=_blank/browser fallback without swallowing the real click.
+  if (typeof document !== "undefined") {
+    document.dispatchEvent(new CustomEvent(OWNER_NAVIGATION_GUARD_START_EVENT, {
+      detail: { durationMs: 13000 }
+    }));
+  }
+  contactManuallyWithoutOwnerNavigation(job);
+  return true;
+}
+
+function containTrustedManualContactNavigation(event) {
+  if (!trustedManualContactEvents.has(event)) return;
+  trustedManualContactEvents.delete(event);
+  // Run after BOSS's delegated handler, but before the browser performs an
+  // anchor's native default navigation. SPA history/window routes are covered
+  // by the main-world guard started synchronously in the capture listener.
+  const anchor = event.target instanceof Element ? event.target.closest("a[href]") : null;
+  if (anchor) event.preventDefault();
+}
+
+async function contactManuallyWithoutOwnerNavigation(job) {
+  manualContactInFlightKeys.add(job.key);
+  setJobProgress(job, "contacting", "正在当前职位页确认手动沟通");
+  setStatus(`正在确认手动沟通，职位列表保持不变：${job.title}`);
+  renderList();
+  try {
+    const result = await observeManualCommunicationOnOwnerPage(job);
+    if (result !== "confirmed") throw new Error(`当前页面未确认沟通成功：${result}`);
+    if (dismissJob(job.key, { reason: "manual_contact" })) {
+      logContactEvent("manual_contact_removed_from_queue", job);
+    }
+  } catch (error) {
+    logContactEvent("manual_contact_failed", job);
+    if (JC_STATE.jobs.some((item) => item.key === job.key)) {
+      setJobProgress(job, "attention", "手动沟通结果未确认，岗位仍保留");
+      renderList();
+    }
+    setStatus(`手动沟通未完成，岗位仍保留在队列：${job.title}。${friendlyContactError(error)}`);
+  } finally {
+    manualContactInFlightKeys.delete(job.key);
+  }
+}
+
+async function observeManualCommunicationOnOwnerPage(job) {
+  const ownerJobsUrl = location.href;
+  const stayWaiter = createStayOnCurrentPageWaiter(12000, job);
+  document.dispatchEvent(new CustomEvent(OWNER_NAVIGATION_GUARD_START_EVENT, {
+    detail: { durationMs: 13000 }
+  }));
+  try {
+    const result = await stayWaiter.promise;
+    if (isBossChatUrl(location.href) || isBossJobDetailUrl(location.href)) {
+      const restored = await restoreManualOwnerJobsRoute(ownerJobsUrl);
+      if (!restored) return "owner_route_escape";
+    }
+    if (result === "stayed_confirmed" || result === "chat_route" || manualCommunicationConfirmed(job)) {
+      return "confirmed";
+    }
+    return communicationBlockStatus() || result || "stay_missing";
+  } finally {
+    document.dispatchEvent(new CustomEvent(OWNER_NAVIGATION_GUARD_STOP_EVENT));
+    stayWaiter.cancel();
+  }
+}
+
+async function restoreManualOwnerJobsRoute(ownerJobsUrl) {
+  if (!isBossChatUrl(location.href) && !isBossJobDetailUrl(location.href)) return true;
+  history.back();
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await sleep(100);
+    if (!isBossChatUrl(location.href) && !isBossJobDetailUrl(location.href)) return true;
+  }
+  return location.href === ownerJobsUrl;
+}
+
+function manualCommunicationConfirmed(job) {
+  const button = findCommunicationButtonForJob(job);
+  const label = cleanText(button?.innerText || button?.textContent || "");
+  return /^(继续沟通|继续聊|再次沟通|已沟通|发消息)$/.test(label)
+    || hasSuccessfulContactEvidence(job);
+}
+
+function openExistingConversationInCompanion(job = null) {
+  sendMessage({ type: "openManualChatTab" })
+    .then((result) => {
+      if (!result?.ok) throw new Error(result?.error || "无法打开消息标签");
+      if (job && dismissJob(job.key, { reason: "manual_contact" })) {
+        logContactEvent("manual_contact_removed_from_queue", job);
+      }
+    })
+    .catch((error) => setStatus(`打开独立消息标签失败：${String(error.message || error)}`));
 }
 
 function openManualChatCompanion(event) {
@@ -407,6 +562,15 @@ async function refreshAutomationSession() {
     restoreOwnedAutomationSession(response.session);
     return;
   }
+  if (response.isOwner) {
+    JC_STATE.remoteSession = null;
+    JC_STATE.sessionOwner = true;
+    setNodeText("jc-page-context", "受保护职位标签已离开职位列表");
+    setStatus(response.session.status
+      || "当前职位标签误入非职位页，自动投递已暂停；请先返回职位列表。");
+    updateAutomationControls();
+    return;
+  }
   JC_STATE.remoteSession = response.session;
   JC_STATE.sessionOwner = false;
   renderRemoteAutomationState();
@@ -433,11 +597,20 @@ function restoreOwnedAutomationSession(session) {
   }
   JC_STATE.pipeline.active = session.active === true;
   JC_STATE.pipeline.mode = session.mode === "auto" ? "auto" : "idle";
+  JC_STATE.pipeline.phase = String(session.phase
+    || (session.paused ? "paused" : (session.active && session.mode === "auto" ? "analysis" : "idle")));
   JC_STATE.pipeline.allPaused = session.paused === true;
+  JC_STATE.pipeline.pauseReason = String(session.pauseReason || "");
   JC_STATE.pipeline.batchNumber = Math.max(1, Number(session.batchNumber) || 1);
   JC_STATE.pipeline.batchKeys = Array.isArray(session.batchKeys)
     ? session.batchKeys.filter((key) => currentKeys.has(key)).slice(0, JOB_BATCH_SIZE)
     : [];
+  JC_STATE.pipeline.batchSize = Math.max(0, Number(session.batchSize)
+    || JC_STATE.pipeline.batchKeys.length);
+  JC_STATE.pipeline.batchWaitRemainingMs = Math.max(0, Number(session.batchWaitRemainingMs) || 0);
+  JC_STATE.pipeline.waitingForNextBatch = session.waitingForNextBatch === true
+    || JC_STATE.pipeline.batchWaitRemainingMs > 0;
+  JC_STATE.pipeline.loadingNextBatch = session.loadingNextBatch === true;
   JC_STATE.currentJobKey = String(session.currentJobKey || "");
   renderList();
   setStatus(session.status || "已恢复专用职位标签的自动投递进度。");
@@ -472,6 +645,8 @@ function applyExternalAutomationControl(action, reason = "manual") {
   if (!JC_STATE.sessionOwner) return;
   if (action === "pause") {
     JC_STATE.pipeline.allPaused = true;
+    JC_STATE.pipeline.phase = "paused";
+    JC_STATE.pipeline.pauseReason = reason === "machine_locked" ? "machine_locked" : "external";
     if (reason === "machine_locked") {
       setStatus("电脑已锁定，自动投递将在当前步骤结束后暂停。");
     } else {
@@ -479,10 +654,20 @@ function applyExternalAutomationControl(action, reason = "manual") {
     }
   } else if (action === "resume") {
     JC_STATE.pipeline.allPaused = false;
+    JC_STATE.pipeline.phase = JC_STATE.pipeline.waitingForNextBatch
+      ? "batch_wait"
+      : (JC_STATE.pipeline.loadingNextBatch
+        ? "batch_loading"
+        : (JC_STATE.pipeline.active ? "analysis" : "idle"));
+    JC_STATE.pipeline.pauseReason = "";
     setStatus(reason === "machine_active"
       ? "电脑恢复使用，自动投递已自动继续。"
       : "已从其他标签继续自动投递。");
-    ensureAnalysisWorker();
+    if (JC_STATE.pipeline.waitingForNextBatch) {
+      advanceToNextBatch().catch((error) => setStatus(`恢复批次等待失败：${error.message || error}`));
+    } else {
+      ensureAnalysisWorker();
+    }
   }
   updateAutomationControls();
   schedulePersistAutomationSession();
@@ -556,54 +741,75 @@ async function toggleJobsPageAutomation() {
 }
 
 async function handlePipelineControl() {
-  if (JC_STATE.remoteSession?.active && !JC_STATE.sessionOwner) {
-    const action = JC_STATE.remoteSession.paused ? "resume" : "pause";
-    await sendMessage({ type: "controlAutomationTab", action });
-    await sleep(250);
-    await refreshAutomationSession();
-    return;
-  }
-  if (JC_STATE.pipeline.contextInvalidated) {
-    setStatus("扩展已重新加载；为保护当前职位列表，插件不会自动刷新。请确认筛选条件已保存后，使用浏览器刷新按钮手动加载新版。");
+  if (JC_STATE.pipeline.controlActionInFlight) return;
+  JC_STATE.pipeline.controlActionInFlight = true;
+  try {
+    if (JC_STATE.remoteSession?.active && !JC_STATE.sessionOwner) {
+      const action = JC_STATE.remoteSession.paused ? "resume" : "pause";
+      await sendMessage({ type: "controlAutomationTab", action });
+      await sleep(250);
+      await refreshAutomationSession();
+      return;
+    }
+    if (JC_STATE.pipeline.contextInvalidated) {
+      setStatus("扩展已重新加载；为保护当前职位列表，插件不会自动刷新。请确认筛选条件已保存后，使用浏览器刷新按钮手动加载新版。");
+      updateAutomationControls();
+      return;
+    }
+    if (JC_STATE.pipeline.allPaused) {
+      JC_STATE.pipeline.allPaused = false;
+      JC_STATE.pipeline.pauseReason = "";
+      JC_STATE.pipeline.phase = JC_STATE.pipeline.waitingForNextBatch
+        ? "batch_wait"
+        : (JC_STATE.pipeline.loadingNextBatch
+          ? "batch_loading"
+          : (JC_STATE.pipeline.active ? "analysis" : "idle"));
+      setStatus("自动投递已继续，将从未完成岗位接着执行。");
+      logAutomationEvent("automation_resumed_manual", {
+        detail: "source=owner_panel"
+      });
+      updateAutomationControls();
+      if (JC_STATE.pipeline.waitingForNextBatch) {
+        advanceToNextBatch().catch((error) => setStatus(`恢复批次等待失败：${error.message || error}`));
+      } else {
+        ensureAnalysisWorker();
+      }
+      return;
+    }
+    if (JC_STATE.pipeline.waitingForNextBatch || JC_STATE.pipeline.loadingNextBatch) {
+      JC_STATE.pipeline.allPaused = true;
+      JC_STATE.pipeline.pauseReason = "manual";
+      JC_STATE.pipeline.phase = "paused";
+      setStatus("正在暂停连续投递，批次进度会保留。");
+      logAutomationEvent("automation_paused_manual", {
+        detail: "source=owner_panel;phase=batch_transition"
+      });
+      updateAutomationControls();
+      schedulePersistAutomationSession();
+      return;
+    }
+    if (JC_STATE.analyzing) {
+      JC_STATE.pipeline.allPaused = true;
+      JC_STATE.pipeline.pauseReason = "manual";
+      JC_STATE.pipeline.phase = "paused";
+      setStatus("正在暂停自动投递。当前步骤结束后停止，岗位进度会保留。");
+      logAutomationEvent("automation_paused_manual", {
+        detail: "source=owner_panel;phase=analysis"
+      });
+      updateAutomationControls();
+      return;
+    }
+    if (JC_STATE.pipeline.mode === "auto" && JC_STATE.pipeline.active
+        && !JC_STATE.jobs.some((job) => jobNeedsProcessing(job))) {
+      setStatus("当前页已经处理完成。切换职位页面后可开始处理新岗位。");
+      updateAutomationControls();
+      return;
+    }
+    await startAutoPipeline();
+  } finally {
+    JC_STATE.pipeline.controlActionInFlight = false;
     updateAutomationControls();
-    return;
   }
-  if (JC_STATE.pipeline.allPaused) {
-    JC_STATE.pipeline.allPaused = false;
-    setStatus("自动投递已继续，将从未完成岗位接着执行。");
-    logAutomationEvent("automation_resumed_manual", {
-      detail: "source=owner_panel"
-    });
-    updateAutomationControls();
-    ensureAnalysisWorker();
-    return;
-  }
-  if (JC_STATE.pipeline.waitingForNextBatch || JC_STATE.pipeline.loadingNextBatch) {
-    JC_STATE.pipeline.allPaused = true;
-    setStatus("正在暂停连续投递，批次进度会保留。");
-    logAutomationEvent("automation_paused_manual", {
-      detail: "source=owner_panel;phase=batch_transition"
-    });
-    updateAutomationControls();
-    schedulePersistAutomationSession();
-    return;
-  }
-  if (JC_STATE.analyzing) {
-    JC_STATE.pipeline.allPaused = true;
-    setStatus("正在暂停自动投递。当前步骤结束后停止，岗位进度会保留。");
-    logAutomationEvent("automation_paused_manual", {
-      detail: "source=owner_panel;phase=analysis"
-    });
-    updateAutomationControls();
-    return;
-  }
-  if (JC_STATE.pipeline.mode === "auto" && JC_STATE.pipeline.active
-      && !JC_STATE.jobs.some((job) => jobNeedsProcessing(job))) {
-    setStatus("当前页已经处理完成。切换职位页面后可开始处理新岗位。");
-    updateAutomationControls();
-    return;
-  }
-  await startAutoPipeline();
 }
 
 function openPanel(panel, launcher) {
@@ -949,6 +1155,7 @@ async function analyzeJobs(options = {}) {
     setStatus("当前处理已暂停，点击“继续自动投递”后从保留进度继续。");
     return { completed: false, reason: "paused" };
   }
+  JC_STATE.pipeline.ownerRouteEscaped = false;
   if (!JC_STATE.page.initialized || !JC_STATE.jobs.length) {
     await synchronizePageContext({ force: true, source: "analysis" });
   }
@@ -959,6 +1166,7 @@ async function analyzeJobs(options = {}) {
   if (force) {
     for (const job of JC_STATE.jobs) {
       JC_STATE.analyses.delete(job.key);
+      JC_STATE.analysisPayloads.delete(job.key);
       JC_STATE.completedJobKeys.delete(job.key);
       setJobProgress(job, "pending");
     }
@@ -981,6 +1189,7 @@ async function analyzeJobs(options = {}) {
       return advanceToNextBatch();
     }
     JC_STATE.pipeline.active = false;
+    JC_STATE.pipeline.phase = "idle";
     setStatus(JC_STATE.pipeline.mode === "auto"
       ? "当前页岗位已处理完成，所有达标岗位都已完成沟通尝试。"
       : "当前页岗位已全部分析，无需重复请求 AI。"
@@ -1005,6 +1214,7 @@ async function analyzeJobs(options = {}) {
     }
     if (JC_STATE.pipeline.allPaused) {
       JC_STATE.analyzing = false;
+      JC_STATE.pipeline.phase = "paused";
       updateAnalysisControls();
       setStatus(`当前处理已暂停，本轮新分析 ${analyzedCount} 个岗位；进度已保留。`);
       return { completed: false, reason: "paused", analyzed: analyzedCount };
@@ -1012,6 +1222,7 @@ async function analyzeJobs(options = {}) {
     if (pageNeedsHuman()) {
       JC_STATE.analyzing = false;
       JC_STATE.pipeline.allPaused = true;
+      JC_STATE.pipeline.phase = "paused";
       updateAnalysisControls();
       setStatus("页面出现登录、验证码或安全验证，已暂停处理，请先人工处理。");
       return { completed: false, reason: "human_verification", analyzed: analyzedCount };
@@ -1053,8 +1264,15 @@ async function analyzeJobs(options = {}) {
     if (JC_STATE.analysisRunId !== runId || JC_STATE.page.generation !== pageGeneration) {
       return { completed: false, reason: "superseded", analyzed: analyzedCount };
     }
+    if (JC_STATE.pipeline.ownerRouteEscaped) {
+      JC_STATE.analyzing = false;
+      updateAutomationControls();
+      renderList();
+      return { completed: false, reason: "owner_route_escape", analyzed: analyzedCount };
+    }
     if (JC_STATE.pipeline.allPaused) {
       JC_STATE.analyzing = false;
+      JC_STATE.pipeline.phase = "paused";
       setJobProgress(job, "pending", "已暂停，尚未请求 AI");
       updateAutomationControls();
       renderList();
@@ -1076,11 +1294,13 @@ async function analyzeJobs(options = {}) {
       excludedDirections: JC_STATE.settings.excludedDirections,
       customInstructions: buildCustomInstructions()
     };
+    JC_STATE.analysisPayloads.set(job.key, payload);
     const response = await requestAiAnalysis(job, payload);
     if (JC_STATE.analysisRunId !== runId || JC_STATE.page.generation !== pageGeneration) {
       return { completed: false, reason: "superseded", analyzed: analyzedCount };
     }
     if (response?.ok) {
+      applyAnalysisPerformance(response.analysis, response.performance);
       JC_STATE.analyses.set(job.key, response.analysis);
       analyzedCount += 1;
       if (isQualifiedJob(job)) {
@@ -1125,6 +1345,7 @@ async function analyzeJobs(options = {}) {
         JC_STATE.analyses.delete(job.key);
         JC_STATE.analyzing = false;
         JC_STATE.pipeline.allPaused = true;
+        JC_STATE.pipeline.phase = "paused";
         updateAutomationControls();
         renderList();
         setStatus(`AI 网络暂时不可用，当前处理已暂停。\n${friendlyAiError(error)}`);
@@ -1149,6 +1370,7 @@ async function analyzeJobs(options = {}) {
     return advanceToNextBatch();
   }
   JC_STATE.pipeline.active = false;
+  JC_STATE.pipeline.phase = "idle";
   updateAnalysisControls();
   setStatus(JC_STATE.pipeline.mode === "auto"
     ? "当前页处理完成：未达标岗位未沟通，达标岗位均已完成沟通或标明具体失败原因。"
@@ -1175,6 +1397,11 @@ function ensureAnalysisWorker() {
 function updateAnalysisControls() {
   const button = document.getElementById("jc-pipeline-control");
   if (!button) return;
+  if (JC_STATE.pipeline.controlActionInFlight) {
+    button.disabled = true;
+    button.textContent = "正在更新自动投递状态…";
+    return;
+  }
   button.disabled = false;
   if (JC_STATE.remoteSession?.active && !JC_STATE.sessionOwner) {
     button.textContent = JC_STATE.remoteSession.paused ? "继续另一个标签" : "暂停另一个标签";
@@ -1236,12 +1463,20 @@ async function startAutoPipeline() {
     if (!JC_STATE.pipeline.active || JC_STATE.pipeline.mode !== "auto") {
       JC_STATE.pipeline.batchNumber = 1;
       JC_STATE.pipeline.batchKeys = [];
+      JC_STATE.pipeline.batchSize = 0;
+      JC_STATE.pipeline.batchWaitRemainingMs = 0;
       JC_STATE.pipeline.waitingForNextBatch = false;
       JC_STATE.pipeline.loadingNextBatch = false;
+      // Starting a new run on the current list must analyze its first card;
+      // completion markers belong to the previous run, not this queue.
+      JC_STATE.completedJobKeys.clear();
     }
     JC_STATE.pipeline.active = true;
     JC_STATE.pipeline.mode = "auto";
+    JC_STATE.pipeline.phase = "analysis";
     JC_STATE.pipeline.allPaused = false;
+    JC_STATE.pipeline.pauseReason = "";
+    JC_STATE.pipeline.ownerRouteEscaped = false;
     JC_STATE.sessionOwner = true;
     JC_STATE.remoteSession = null;
     await registerAutomationSession();
@@ -1276,7 +1511,9 @@ function buildAutomationSessionPayload(overrides = {}) {
   const payload = {
     active: JC_STATE.pipeline.active,
     paused: JC_STATE.pipeline.allPaused,
+    pauseReason: JC_STATE.pipeline.pauseReason,
     mode: JC_STATE.pipeline.mode,
+    phase: JC_STATE.pipeline.phase,
     jobsUrl: JC_STATE.page.url || location.href.split("#")[0],
     fingerprint: JC_STATE.page.fingerprint,
     analyses: Object.fromEntries(JC_STATE.analyses),
@@ -1285,6 +1522,10 @@ function buildAutomationSessionPayload(overrides = {}) {
     completedJobKeys: Array.from(JC_STATE.completedJobKeys).slice(-500),
     batchNumber: JC_STATE.pipeline.batchNumber,
     batchKeys: JC_STATE.pipeline.batchKeys.slice(0, JOB_BATCH_SIZE),
+    batchSize: JC_STATE.pipeline.batchSize,
+    batchWaitRemainingMs: JC_STATE.pipeline.batchWaitRemainingMs,
+    waitingForNextBatch: JC_STATE.pipeline.waitingForNextBatch,
+    loadingNextBatch: JC_STATE.pipeline.loadingNextBatch,
     summary: {
       total: jobs.length,
       analyzed: jobs.filter((job) => JC_STATE.analyses.has(job.key)).length,
@@ -1350,12 +1591,14 @@ function prepareCurrentBatch() {
   });
   if (current.length) {
     JC_STATE.pipeline.batchKeys = current;
+    JC_STATE.pipeline.batchSize = current.length;
     return current;
   }
   JC_STATE.pipeline.batchKeys = JC_STATE.jobs
     .filter((job) => !job.detached && !JC_STATE.completedJobKeys.has(job.key))
     .slice(0, JOB_BATCH_SIZE)
     .map((job) => job.key);
+  JC_STATE.pipeline.batchSize = JC_STATE.pipeline.batchKeys.length;
   schedulePersistAutomationSession();
   return JC_STATE.pipeline.batchKeys;
 }
@@ -1377,20 +1620,30 @@ function rememberCompletedJobKey(key) {
 }
 
 async function advanceToNextBatch() {
-  if (JC_STATE.pipeline.waitingForNextBatch || JC_STATE.pipeline.loadingNextBatch) {
+  if (JC_STATE.pipeline.loadingNextBatch) {
     return { completed: false, reason: "batch_transition" };
   }
+  const resumingBatchWait = JC_STATE.pipeline.waitingForNextBatch;
   JC_STATE.pipeline.waitingForNextBatch = true;
-  JC_STATE.pipeline.batchKeys = [];
+  JC_STATE.pipeline.phase = "batch_wait";
+  if (!resumingBatchWait) {
+    JC_STATE.pipeline.batchKeys = [];
+    JC_STATE.pipeline.batchWaitRemainingMs = BETWEEN_BATCHES_DELAY_MS;
+  }
   updateAutomationControls();
 
-  const deadline = Date.now() + BETWEEN_BATCHES_DELAY_MS;
-  logAutomationEvent("batch_wait_started", {
-    detail: `batch=${JC_STATE.pipeline.batchNumber};delayMs=${BETWEEN_BATCHES_DELAY_MS}`
+  const waitDuration = resumingBatchWait
+    ? JC_STATE.pipeline.batchWaitRemainingMs
+    : BETWEEN_BATCHES_DELAY_MS;
+  const deadline = Date.now() + Math.max(0, waitDuration);
+  logAutomationEvent(resumingBatchWait ? "batch_wait_resumed" : "batch_wait_started", {
+    detail: `batch=${JC_STATE.pipeline.batchNumber};delayMs=${Math.max(0, waitDuration)}`
   });
+  schedulePersistAutomationSession();
   while (Date.now() < deadline) {
     if (!JC_STATE.pipeline.active || JC_STATE.pipeline.allPaused) {
-      JC_STATE.pipeline.waitingForNextBatch = false;
+      JC_STATE.pipeline.batchWaitRemainingMs = Math.max(0, deadline - Date.now());
+      JC_STATE.pipeline.phase = "paused";
       updateAutomationControls();
       setStatus("连续投递已暂停，批次进度已保留。");
       logAutomationEvent("batch_wait_interrupted", {
@@ -1400,6 +1653,7 @@ async function advanceToNextBatch() {
       return { completed: false, reason: "paused" };
     }
     const seconds = Math.max(1, Math.ceil((deadline - Date.now()) / 1000));
+    JC_STATE.pipeline.batchWaitRemainingMs = Math.max(0, deadline - Date.now());
     setStatus(`第 ${JC_STATE.pipeline.batchNumber} 批已完成，${seconds} 秒后加载后续岗位。`);
     await sleep(Math.min(1000, deadline - Date.now()));
   }
@@ -1408,7 +1662,9 @@ async function advanceToNextBatch() {
     detail: `batch=${JC_STATE.pipeline.batchNumber}`
   });
   JC_STATE.pipeline.waitingForNextBatch = false;
+  JC_STATE.pipeline.batchWaitRemainingMs = 0;
   JC_STATE.pipeline.loadingNextBatch = true;
+  JC_STATE.pipeline.phase = "batch_loading";
   setStatus("正在加载当前列表后面的岗位...");
   updateAutomationControls();
 
@@ -1427,11 +1683,13 @@ async function advanceToNextBatch() {
     if (!nextKeys.length) {
       JC_STATE.pipeline.active = false;
       JC_STATE.pipeline.mode = "idle";
+      JC_STATE.pipeline.phase = "idle";
       setStatus("没有识别到更多新岗位，连续投递已完成。");
       return { completed: true, reason: "no_more_jobs" };
     }
 
     JC_STATE.pipeline.batchNumber += 1;
+    JC_STATE.pipeline.phase = "analysis";
     updatePageContextLabel();
     setStatus(`已加载第 ${JC_STATE.pipeline.batchNumber} 批，共 ${nextKeys.length} 个新岗位，继续自动投递。`);
     return { completed: false, reason: "next_batch_ready" };
@@ -1473,6 +1731,184 @@ function findScrollableAncestor(node) {
   return null;
 }
 
+async function communicateInHiddenFrame(job) {
+  // Kept only for backwards-compatible source references.  0.9.5 never calls
+  // this path because BOSS can classify hidden-frame clicks as automation.
+  // Do not re-enable it as an automatic fallback.
+  return "hidden_frame_disabled";
+  /* istanbul ignore next -- retired automation path */
+  if (!job?.url || !isJobsPage()) return "hidden_frame_unavailable";
+  const frameUrl = new URL(String(job.url), location.href);
+  if (frameUrl.hostname !== "www.zhipin.com" || !/\/job_detail\//.test(frameUrl.pathname)) {
+    return "hidden_frame_unavailable";
+  }
+
+  const iframe = document.createElement("iframe");
+  hiddenContactFrame?.remove();
+  hiddenContactFrame = iframe;
+  iframe.id = "job-copilot-hidden-contact-frame";
+  iframe.title = "Job Copilot 后台沟通";
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.tabIndex = -1;
+  iframe.src = frameUrl.href;
+  iframe.style.position = "fixed";
+  iframe.style.left = "-12000px";
+  iframe.style.top = "0";
+  iframe.style.width = "1280px";
+  iframe.style.height = "900px";
+  iframe.style.border = "0";
+  iframe.style.opacity = "0";
+  iframe.style.pointerEvents = "none";
+  iframe.style.zIndex = "-1";
+  document.documentElement.appendChild(iframe);
+
+  try {
+    const ready = await waitForHiddenFrameButton(iframe, job, HIDDEN_CONTACT_FRAME_TIMEOUT_MS);
+    if (!ready) return "hidden_frame_unavailable";
+    const frameDocument = iframe.contentDocument;
+    const button = findCommunicationButtons(frameDocument)[0];
+    if (!button) return "no_button";
+    const label = cleanText(button.innerText || button.textContent || "");
+    if (/^(继续沟通|继续聊|再次沟通)$/.test(label)) return "already_contacted";
+
+    // The route guard must be armed in both realms.  Events dispatched on the
+    // owner document do not cross the iframe boundary, so the frame itself
+    // needs its own guard before BOSS's delegated click handler runs.
+    dispatchNavigationGuardEvent(frameDocument, OWNER_NAVIGATION_GUARD_START_EVENT, {
+      durationMs: HIDDEN_CONTACT_FRAME_TIMEOUT_MS
+    });
+    dispatchNavigationGuardEvent(document, OWNER_NAVIGATION_GUARD_START_EVENT, {
+      durationMs: HIDDEN_CONTACT_FRAME_TIMEOUT_MS
+    });
+    try {
+      return await waitForHiddenFrameCommunication(iframe, job, button);
+    } finally {
+      dispatchNavigationGuardEvent(frameDocument, OWNER_NAVIGATION_GUARD_STOP_EVENT);
+      dispatchNavigationGuardEvent(document, OWNER_NAVIGATION_GUARD_STOP_EVENT);
+    }
+  } catch (error) {
+    console.warn("[Job Copilot] hidden contact frame failed", error);
+    return "hidden_frame_unavailable";
+  } finally {
+    if (hiddenContactFrame === iframe) hiddenContactFrame = null;
+    iframe.remove();
+  }
+}
+
+async function waitForHiddenFrameButton(iframe, job, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const frameDocument = iframe.contentDocument;
+    if (frameDocument) {
+      const buttons = findCommunicationButtons(frameDocument);
+      if (buttons.length > 0) {
+        const frameJobId = bossJobIdFromUrl(iframe.contentWindow?.location?.href || iframe.src);
+        const expectedJobId = bossJobIdFromUrl(job.url);
+        if (!expectedJobId || !frameJobId || frameJobId === expectedJobId) return true;
+      }
+    }
+    await sleep(250);
+  }
+  return false;
+}
+
+async function waitForHiddenFrameCommunication(iframe, job, button) {
+  clickWithinHiddenFrame(button);
+  const deadline = Date.now() + HIDDEN_CONTACT_FRAME_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const frameDocument = iframe.contentDocument;
+    const frameUrl = iframe.contentWindow?.location?.href || iframe.src;
+    if (isBossChatUrl(frameUrl)) return "navigated_chat";
+    if (frameDocument) {
+      const stayButton = findHiddenFrameStayOnCurrentPageButton(frameDocument);
+      if (stayButton) {
+        const confirmsSend = stayOnPageDialogConfirmsSend(stayButton);
+        clickWithinHiddenFrame(stayButton);
+        await sleep(300);
+        if (confirmsSend || hasHiddenFrameSuccessfulContactEvidence(frameDocument, job)) {
+          return "stayed_confirmed";
+        }
+        return "stayed";
+      }
+      if (hasHiddenFrameSuccessfulContactEvidence(frameDocument, job)) return "stayed_confirmed";
+      const blocked = communicationBlockStatusInRoot(frameDocument);
+      if (blocked) return blocked;
+      const currentButton = findCommunicationButtons(frameDocument)[0];
+      const label = cleanText(currentButton?.innerText || currentButton?.textContent || "");
+      if (/^(继续沟通|继续聊|再次沟通|已沟通|发消息)$/.test(label)) return "stayed_confirmed";
+    }
+    await sleep(250);
+  }
+  return communicationBlockStatusInRoot(iframe.contentDocument) || "stay_missing";
+}
+
+function clickWithinHiddenFrame(node) {
+  if (!node) return false;
+  const anchor = node.closest?.("a[href]");
+  // BOSS renders these controls as javascript: anchors.  Suppress the
+  // browser's CSP-violating default action while preserving the trusted
+  // delegated click handler that performs the real UI operation.
+  preventJavascriptUrlDefaultOnce(node);
+  const originalTarget = anchor?.getAttribute("target");
+  const originalRel = anchor?.getAttribute("rel");
+  if (anchor) {
+    anchor.setAttribute("target", "_self");
+    anchor.setAttribute("rel", "noopener noreferrer");
+  }
+  node.click();
+  if (anchor) {
+    setTimeout(() => {
+      if (originalTarget === null) anchor.removeAttribute("target");
+      else anchor.setAttribute("target", originalTarget);
+      if (originalRel === null) anchor.removeAttribute("rel");
+      else anchor.setAttribute("rel", originalRel);
+    }, 0);
+  }
+  return true;
+}
+
+function dispatchNavigationGuardEvent(target, type, detail = undefined) {
+  if (!target?.dispatchEvent) return;
+  const ownerWindow = target.defaultView || window;
+  const EventCtor = ownerWindow.CustomEvent || CustomEvent;
+  target.dispatchEvent(new EventCtor(type, { detail }));
+}
+
+function findHiddenFrameStayOnCurrentPageButton(root) {
+  if (!root?.querySelectorAll) return null;
+  return Array.from(root.querySelectorAll("button,a,div[class*='btn'],span[class*='btn']"))
+    .find((item) => {
+      if (!isElementVisible(item)) return false;
+      const text = cleanText(item.innerText || item.textContent || "");
+      if (!/^(留在此页|留在当前页|暂不进入聊天)$/.test(text)) return false;
+      const dialog = item.closest("[role='dialog'], .dialog, .modal, .boss-dialog, [class*='dialog'], [class*='modal']");
+      const scopeText = cleanText((dialog || item.parentElement || item).innerText || "");
+      return /已向BOSS发送消息|消息已发送|留在此页|留在当前页|暂不进入聊天/.test(scopeText);
+    }) || null;
+}
+
+function hasHiddenFrameSuccessfulContactEvidence(root, _expectedJob = null) {
+  if (!root?.querySelectorAll) return false;
+  const controls = Array.from(root.querySelectorAll("a,button"));
+  if (controls.some((item) => {
+    if (!isElementVisible(item)) return false;
+    const text = cleanText(item.innerText || item.textContent || "");
+    return /^(继续沟通|继续聊|再次沟通|已沟通|发消息)$/.test(text);
+  })) return true;
+  const statusNodes = Array.from(root.querySelectorAll(CONTACT_STATUS_SELECTOR));
+  return statusNodes.some((node) => /已向BOSS发送消息|消息发送成功|消息已发送|招呼已发送|已与BOSS沟通|已发起沟通/
+    .test(cleanText(node.textContent || "")));
+}
+
+function communicationBlockStatusInRoot(root) {
+  const text = cleanText(root?.body?.textContent || root?.textContent || "");
+  if (/安全验证|验证码|拖动滑块|滑块验证|访问异常|账号异常/.test(text)) return "blocked_security";
+  if (/沟通.{0,8}(?:上限|额度|数量)|今日.{0,8}(?:沟通|招呼).{0,8}(?:上限|用完)|已达.{0,8}(?:沟通|招呼)/.test(text)) return "blocked_limit";
+  if (/操作频繁|请求频繁|请稍后再试|操作过快|访问过于频繁/.test(text)) return "blocked_rate";
+  if (/沟通失败|发送失败|暂时无法沟通|无法发起沟通/.test(text)) return "blocked_generic";
+  return "";
+}
+
 async function contactQualifiedJob(job, context) {
   if (!job.card?.isConnected) {
     setJobProgress(job, "unavailable", "岗位已离开当前页面");
@@ -1503,7 +1939,7 @@ async function contactQualifiedJob(job, context) {
     return "superseded";
   }
 
-  if (result === "stayed" || result === "navigated_chat" || result === "already_contacted") {
+  if (["stayed", "stayed_confirmed", "navigated_chat", "already_contacted"].includes(result)) {
     setJobProgress(job, "contacted");
     completeJob(job);
     setStatus(result === "already_contacted"
@@ -1534,6 +1970,15 @@ async function contactQualifiedJob(job, context) {
     renderList();
     return "continue";
   }
+  if (result === "manual_required") {
+    const detail = "BOSS 未接受脚本触发，请在当前职位页手动点击一次“立即沟通”；插件会自动点击“留在此页”并继续队列";
+    setJobProgress(job, "attention", detail);
+    JC_STATE.pipeline.allPaused = true;
+    JC_STATE.pipeline.phase = "paused";
+    setStatus(detail);
+    renderList();
+    return "pause";
+  }
   const blockingMessage = {
     blocked_rate: "BOSS 提示操作频繁，已暂停后续岗位。",
     blocked_limit: "BOSS 提示沟通数量或额度已达上限，已暂停后续岗位。",
@@ -1543,6 +1988,7 @@ async function contactQualifiedJob(job, context) {
   setJobProgress(job, "attention", blockingMessage);
   completeJob(job);
   JC_STATE.pipeline.allPaused = true;
+  JC_STATE.pipeline.phase = "paused";
   setStatus(blockingMessage);
   renderList();
   return "halted";
@@ -1667,8 +2113,13 @@ function applyJobSnapshot(snapshot, options = {}) {
     JC_STATE.page.url = snapshot.url;
     JC_STATE.jobs = snapshot.jobs;
     JC_STATE.analyses.clear();
+    JC_STATE.analysisPayloads.clear();
+    JC_STATE.reanalysisInFlightKeys.clear();
     JC_STATE.jobProgress.clear();
     JC_STATE.pipeline.batchKeys = [];
+    // A replaced list is a new legacy queue context. Do not let completion
+    // markers from the previous search silently skip its first card.
+    if (pageReplaced) JC_STATE.completedJobKeys.clear();
     JC_STATE.selectedKey = "";
     for (const job of JC_STATE.jobs) setJobProgress(job, "pending");
     renderList();
@@ -1728,6 +2179,12 @@ function pruneJobState(retainedKeys) {
   for (const key of JC_STATE.analyses.keys()) {
     if (!retainedKeys.has(key)) JC_STATE.analyses.delete(key);
   }
+  for (const key of JC_STATE.analysisPayloads.keys()) {
+    if (!retainedKeys.has(key)) JC_STATE.analysisPayloads.delete(key);
+  }
+  for (const key of JC_STATE.reanalysisInFlightKeys) {
+    if (!retainedKeys.has(key)) JC_STATE.reanalysisInFlightKeys.delete(key);
+  }
   for (const key of JC_STATE.jobProgress.keys()) {
     if (!retainedKeys.has(key)) JC_STATE.jobProgress.delete(key);
   }
@@ -1754,7 +2211,7 @@ function restartPipelineForGeneration(mode, generation) {
 }
 
 function isInsideJobCopilot(node) {
-  const element = node instanceof Element ? node : node?.parentElement;
+  const element = node?.closest ? node : node?.parentElement;
   return Boolean(element?.closest?.("#job-copilot-panel, #job-copilot-launcher"));
 }
 
@@ -1808,7 +2265,7 @@ function clickWithinDisposableTab(node) {
 }
 
 function isElementVisible(node) {
-  if (!node || !(node instanceof Element)) return false;
+  if (!node || node.nodeType !== 1 || typeof node.getBoundingClientRect !== "function") return false;
   const rect = node.getBoundingClientRect();
   if (rect.width < 4 || rect.height < 4) return false;
   const style = getComputedStyle(node);
@@ -1850,11 +2307,15 @@ function updateJobRow(item, job) {
     : "";
   const progress = progressFor(job);
   const progressInfo = jobProgressInfo(progress.status);
+  const reanalysisInFlight = JC_STATE.reanalysisInFlightKeys.has(job.key);
+  const hasReplayPayload = JC_STATE.analysisPayloads.has(job.key);
+  const reanalysisDisabled = job.detached || !hasReplayPayload || reanalysisInFlight
+    || ["analyzing", "contacting"].includes(progress.status);
   const dismissalDisabled = progress.status === "contacting";
   const meta = [job.company, job.city, job.requirements].filter(Boolean).slice(0, 2).join(" · ");
   const renderSignature = JSON.stringify([
     job.index, job.title, job.jobName, job.salary, job.salaryFontFamily, meta, job.detached,
-    progress.status, progress.detail, score, exclusionSummary
+    progress.status, progress.detail, score, exclusionSummary, reanalysisInFlight, reanalysisDisabled
   ]);
   if (item.dataset.renderSignature === renderSignature) return;
   item.dataset.renderSignature = renderSignature;
@@ -1876,25 +2337,31 @@ function updateJobRow(item, job) {
           ${dismissalDisabled ? "disabled" : ""}>×</button>
       </div>
       <span class="jc-score">${score === "--" ? "" : `${escapeHtml(String(score))} 分`}</span>
-      ${progress.status === "error"
-        ? `<button class="jc-locate-button jc-retry-button" data-retry-key="${escapeAttr(job.key)}" ${job.detached ? "disabled" : ""}>重新分析</button>`
-        : `<button class="jc-locate-button" data-focus-key="${escapeAttr(job.key)}" ${job.detached ? "disabled" : ""}>定位</button>`}
+      <div class="jc-job-actions">
+        <button class="jc-locate-button jc-retry-button" data-reanalyze-key="${escapeAttr(job.key)}"
+          title="${!hasReplayPayload ? "该岗位尚无可复用的分析输入" : "使用上次采集的 JD 独立重新分析，不影响主队列"}"
+          ${reanalysisDisabled ? "disabled" : ""}>${reanalysisInFlight ? "重分析中…" : "重新分析"}</button>
+        <button class="jc-locate-button" data-focus-key="${escapeAttr(job.key)}"
+          ${job.detached ? "disabled" : ""}>定位</button>
+      </div>
     </div>
   `;
   mountSalaryVisualClone(item, job);
 }
 
-function dismissJob(key) {
+function dismissJob(key, options = {}) {
   const job = JC_STATE.jobs.find((item) => item.key === key);
   if (!job) return false;
   const progress = progressFor(job);
-  if (progress.status === "contacting") {
+  const manuallyContacted = options.reason === "manual_contact";
+  if (progress.status === "contacting" && !manuallyContacted) {
     setStatus(`正在沟通，暂时无法关闭：${job.title}`);
     return false;
   }
 
   const interruptsCurrentRun = progress.status === "analyzing"
     || progress.status === "qualified"
+    || (progress.status === "contacting" && !manuallyContacted)
     || JC_STATE.currentJobKey === key;
   JC_STATE.dismissedJobKeys.add(key);
   rememberCompletedJobKey(key);
@@ -1902,6 +2369,8 @@ function dismissJob(key) {
     .filter((item) => item.key !== key)
     .map((item, index) => ({ ...item, index }));
   JC_STATE.analyses.delete(key);
+  JC_STATE.analysisPayloads.delete(key);
+  JC_STATE.reanalysisInFlightKeys.delete(key);
   JC_STATE.jobProgress.delete(key);
   JC_STATE.pipeline.batchKeys = JC_STATE.pipeline.batchKeys.filter((item) => item !== key);
   if (JC_STATE.retryJobKey === key) JC_STATE.retryJobKey = "";
@@ -1915,7 +2384,9 @@ function dismissJob(key) {
     JC_STATE.analyzing = false;
   }
 
-  setStatus(`已关闭检测并移出投递列表：${job.title}`);
+  setStatus(manuallyContacted
+    ? `已手动沟通并移出投递列表：${job.title}`
+    : `已关闭检测并移出投递列表：${job.title}`);
   renderList();
   updateAutomationControls();
   schedulePersistAutomationSession();
@@ -1954,7 +2425,7 @@ function installJobListEventDelegation(list) {
   list.dataset.jcDelegated = "true";
   list.addEventListener("click", (event) => {
     const button = event.target instanceof Element
-      ? event.target.closest("[data-focus-key], [data-retry-key], [data-dismiss-key]")
+      ? event.target.closest("[data-focus-key], [data-reanalyze-key], [data-retry-key], [data-dismiss-key]")
       : null;
     if (!button || !list.contains(button) || button.disabled) return;
     if (button.dataset.dismissKey) {
@@ -1965,6 +2436,12 @@ function installJobListEventDelegation(list) {
       focusJob(button.dataset.focusKey);
       return;
     }
+    if (button.dataset.reanalyzeKey) {
+      reanalyzeJobInParallel(button.dataset.reanalyzeKey).catch((error) => {
+        setStatus(`重新分析启动失败：${friendlyAiError(error?.message || error)}`);
+      });
+      return;
+    }
     if (button.dataset.retryKey) {
       retryFailedJob(button.dataset.retryKey).catch((error) => {
         setStatus(`重新分析启动失败：${friendlyAiError(error?.message || error)}`);
@@ -1972,6 +2449,49 @@ function installJobListEventDelegation(list) {
       });
     }
   });
+}
+
+async function reanalyzeJobInParallel(key) {
+  const job = JC_STATE.jobs.find((item) => item.key === key);
+  const payload = JC_STATE.analysisPayloads.get(key);
+  if (!job || !payload || job.detached) return { ok: false, reason: "missing_payload" };
+  if (JC_STATE.reanalysisInFlightKeys.has(key)) return { ok: false, reason: "already_running" };
+  if (["analyzing", "contacting"].includes(progressFor(job).status)) {
+    return { ok: false, reason: "job_busy" };
+  }
+
+  JC_STATE.reanalysisInFlightKeys.add(key);
+  renderList();
+  logAutomationEvent("ai_reanalysis_started", { job, detail: "source=manual_parallel" });
+  try {
+    const response = await requestAiAnalysis(job, payload, {
+      updateGlobalStatus: false,
+      source: "manual_parallel"
+    });
+    if (!JC_STATE.jobs.some((item) => item.key === key)) return { ok: false, reason: "job_removed" };
+    if (!response?.ok) {
+      const error = friendlyAiError(response?.error || "重新分析失败");
+      if (!JC_STATE.analyzing) setStatus(`重新分析失败，保留原结果：${job.title}。${error}`);
+      return { ok: false, reason: "analysis_failed", error };
+    }
+
+    applyAnalysisPerformance(response.analysis, response.performance);
+    JC_STATE.analyses.set(key, response.analysis);
+    const currentStatus = progressFor(job).status;
+    if (["error", "not_qualified", "qualified"].includes(currentStatus)) {
+      setJobProgress(job, analysisProgressStatus(job), "独立重新分析已完成");
+    }
+    schedulePersistAutomationSession();
+    if (!JC_STATE.analyzing) setStatus(`重新分析完成：${job.title}，最新评分 ${response.analysis.score} 分。`);
+    logAutomationEvent("ai_reanalysis_completed", {
+      job,
+      detail: `source=manual_parallel;score=${Number(response.analysis.score)}`
+    });
+    return { ok: true, analysis: response.analysis };
+  } finally {
+    JC_STATE.reanalysisInFlightKeys.delete(key);
+    renderList();
+  }
 }
 
 async function retryFailedJob(key) {
@@ -2060,7 +2580,8 @@ function updatePageContextLabel() {
   }
   const visible = JC_STATE.jobs.filter((job) => !job.detached).length;
   const batch = Math.max(1, Number(JC_STATE.pipeline.batchNumber) || 1);
-  node.textContent = `第 ${batch} 批 · 当前列表 ${visible} 个岗位`;
+  const batchSize = Math.max(0, Number(JC_STATE.pipeline.batchSize) || 0);
+  node.textContent = `第 ${batch} 批 · 当前列表总数 ${visible} 个 · 本批 ${batchSize} 个`;
 }
 
 function setNodeText(id, value) {
@@ -2107,6 +2628,7 @@ function stopForInvalidatedExtensionContext(job) {
   JC_STATE.analyzing = false;
   JC_STATE.pipeline.active = false;
   JC_STATE.pipeline.allPaused = true;
+  JC_STATE.pipeline.phase = "paused";
   JC_STATE.pipeline.contextInvalidated = true;
   if (job) {
     JC_STATE.analyses.delete(job.key);
@@ -2180,24 +2702,76 @@ async function clickCommunicateForJob(job) {
   if (!button) return "no_button";
 
   const label = cleanText(button.innerText || button.textContent || "");
-  if (/^(继续沟通|继续聊)$/.test(label)) {
+  if (/^(继续沟通|继续聊|再次沟通)$/.test(label)) {
     logContactEvent("existing_conversation_skipped", job);
     return "already_contacted";
   }
+  // Communication must happen in the visible owner jobs page.  A hidden
+  // iframe makes BOSS treat the interaction as automation and can suppress
+  // the normal "留在此页 / 继续沟通" dialog.  The owner-page guard prevents
+  // the same click from taking the jobs tab to chat or opening a new tab.
+  const status = await communicateOnOwnerPage(job, button);
+  logContactEvent(`owner_${status}`, job);
+  return status;
+}
 
-  const response = await sendMessage({
-    type: "communicateInIsolatedTab",
-    job: {
-      key: job.key,
-      title: job.jobName || job.title,
-      company: job.company,
-      url: job.url
+async function communicateOnOwnerPage(job, button = findCommunicationButtonForJob(job)) {
+  if (!isJobsPage() || !button) return button ? "owner_page_unavailable" : "no_button";
+  const ownerJobsUrl = location.href;
+  button.scrollIntoView?.({ block: "center", inline: "center" });
+  button.focus?.({ preventScroll: true });
+  const waiter = createStayOnCurrentPageWaiter(HIDDEN_CONTACT_FRAME_TIMEOUT_MS, job);
+  document.dispatchEvent(new CustomEvent(OWNER_NAVIGATION_GUARD_START_EVENT, {
+    detail: { durationMs: HIDDEN_CONTACT_FRAME_TIMEOUT_MS }
+  }));
+  try {
+    clickOnOwnerPage(button);
+    const result = await waiter.promise;
+    if (result === "chat_route" || isBossChatUrl(location.href) || isBossJobDetailUrl(location.href)) {
+      const restored = await restoreManualOwnerJobsRoute(ownerJobsUrl);
+      if (!restored) return "owner_route_escape";
+      return manualCommunicationConfirmed(job) ? "stayed_confirmed" : "owner_route_escape";
     }
-  });
-  if (!response?.ok) throw new Error(response?.error || "后台沟通失败");
-  const status = String(response.status || "stay_missing");
-  logContactEvent(`isolated_${status}`, job);
-  return status === "chat_route" ? "navigated_chat" : status;
+    if (result === "stay_missing" && !manualCommunicationConfirmed(job)) {
+      // A browser extension cannot manufacture a trusted mouse event.  Keep
+      // the job in the queue and let the existing trusted manual-click path
+      // observe the real BOSS dialog instead of guessing success.
+      return "manual_required";
+    }
+    return result;
+  } finally {
+    waiter.cancel();
+    document.dispatchEvent(new CustomEvent(OWNER_NAVIGATION_GUARD_STOP_EVENT));
+  }
+}
+
+function clickOnOwnerPage(node) {
+  if (!node) return false;
+  const anchor = node.closest?.("a[href]");
+  const href = anchor?.getAttribute?.("href") || "";
+  const originalTarget = anchor?.getAttribute?.("target");
+  const originalRel = anchor?.getAttribute?.("rel");
+  if (anchor) {
+    anchor.setAttribute("target", "_self");
+    anchor.setAttribute("rel", "noopener noreferrer");
+    if (/\/job_detail\/|\/web\/geek\/chat/.test(href)) {
+      anchor.addEventListener("click", (event) => event.preventDefault(), {
+        capture: true,
+        once: true
+      });
+    }
+  }
+  preventJavascriptUrlDefaultOnce(node);
+  node.click();
+  if (anchor) {
+    setTimeout(() => {
+      if (originalTarget === null) anchor.removeAttribute("target");
+      else anchor.setAttribute("target", originalTarget);
+      if (originalRel === null) anchor.removeAttribute("rel");
+      else anchor.setAttribute("rel", originalRel);
+    }, 0);
+  }
+  return true;
 }
 
 async function performIsolatedCommunication(expectedJob = {}) {
@@ -2217,11 +2791,11 @@ async function performIsolatedCommunication(expectedJob = {}) {
     }
 
     const label = cleanText(button.innerText || button.textContent || "");
-    if (/^(继续沟通|继续聊)$/.test(label)) return "already_contacted";
+    if (/^(继续沟通|继续聊|再次沟通)$/.test(label)) return "already_contacted";
 
     button.scrollIntoView?.({ block: "center", inline: "center" });
     button.focus?.({ preventScroll: true });
-    const stayWaiter = createStayOnCurrentPageWaiter(12000);
+    const stayWaiter = createStayOnCurrentPageWaiter(12000, expectedJob);
     try {
       clickWithinDisposableTab(button);
       const result = await stayWaiter.promise;
@@ -2255,16 +2829,32 @@ async function selectJobDetail(job) {
   if (!targets.length) return false;
   // Trigger selection handlers while always cancelling an anchor's default
   // navigation. The owner jobs tab must never become a detail/chat route.
-  for (const target of targets) {
-    clickWithoutOwnerNavigation(target);
-    for (let attempt = 0; attempt < 18; attempt += 1) {
-      await sleep(100);
-      if (detailMatchesJob(job)) return true;
-      if (isBossChatUrl(location.href)) return false;
+  const ownerJobsUrl = location.href;
+  document.dispatchEvent(new CustomEvent(OWNER_NAVIGATION_GUARD_START_EVENT, {
+    detail: { durationMs: 6000 }
+  }));
+  try {
+    for (const target of targets) {
+      const stayedOnJobsPage = await clickWithoutOwnerNavigation(target, ownerJobsUrl);
+      if (!stayedOnJobsPage) {
+        pauseForOwnerRouteEscape(job);
+        return false;
+      }
+      for (let attempt = 0; attempt < 18; attempt += 1) {
+        await sleep(100);
+        if (!restoreOwnerJobsRoute(ownerJobsUrl)) {
+          pauseForOwnerRouteEscape(job);
+          return false;
+        }
+        if (detailMatchesJob(job)) return true;
+        if (isBossChatUrl(location.href)) return false;
+      }
     }
+    logContactEvent("detail_mismatch", job);
+    return false;
+  } finally {
+    document.dispatchEvent(new CustomEvent(OWNER_NAVIGATION_GUARD_STOP_EVENT));
   }
-  logContactEvent("detail_mismatch", job);
-  return false;
 }
 
 function findJobCardActivationTargets(card) {
@@ -2280,7 +2870,23 @@ function findJobCardActivationTargets(card) {
   return targets;
 }
 
-function clickWithoutOwnerNavigation(node) {
+function isBossJobDetailUrl(url) {
+  if (!url) return false;
+  try {
+    const parsed = new URL(String(url), location.href);
+    return parsed.hostname === "www.zhipin.com" && /\/job_detail\//.test(parsed.pathname);
+  } catch {
+    return /\/job_detail\//.test(String(url));
+  }
+}
+
+function restoreOwnerJobsRoute(ownerJobsUrl) {
+  if (isBossJobDetailUrl(ownerJobsUrl) || !isBossJobDetailUrl(location.href)) return true;
+  history.back();
+  return false;
+}
+
+async function clickWithoutOwnerNavigation(node, ownerJobsUrl = location.href) {
   if (!node) return false;
   const anchor = node.closest?.("a[href]");
   anchor?.addEventListener("click", (event) => event.preventDefault(), {
@@ -2288,7 +2894,24 @@ function clickWithoutOwnerNavigation(node) {
     once: true
   });
   node.click();
-  return true;
+  if (!restoreOwnerJobsRoute(ownerJobsUrl)) return false;
+  // BOSS may schedule router.push() in a microtask after its click handler.
+  // Check once more before allowing the caller to wait for detail content.
+  await Promise.resolve();
+  return restoreOwnerJobsRoute(ownerJobsUrl);
+}
+
+function pauseForOwnerRouteEscape(job) {
+  JC_STATE.pipeline.allPaused = true;
+  JC_STATE.pipeline.ownerRouteEscaped = true;
+  setJobProgress(job, "attention", "读取 JD 时职位标签误入详情页，已后退并暂停");
+  setStatus("检测到 BOSS 将职位列表标签切到详情页，已自动后退并暂停。请确认列表恢复后再继续。");
+  logAutomationEvent("owner_job_detail_route_restored", {
+    job,
+    detail: "action=history.back;automation=paused"
+  });
+  renderList();
+  updateAutomationControls();
 }
 
 function detailMatchesJob(job) {
@@ -2298,8 +2921,10 @@ function detailMatchesJob(job) {
 function communicationButtonMatchesJob(button, job) {
   const detail = findJobDetailScope(button);
   if (!detail) return false;
+  const targetJobId = bossJobIdFromUrl(job.url);
+  const detailJobId = bossJobIdForCommunicationButton(button, detail);
+  if (targetJobId && detailJobId) return targetJobId === detailJobId;
   const targetTitle = comparableJobText(job.jobName || job.title || "");
-  const targetCompany = comparableJobText(job.company || "");
   const detailText = comparableJobText(detail.innerText || "");
   const headingTexts = Array.from(detail.querySelectorAll(
     "h1,h2,h3,.job-name,.job-title,[class*='job-name'],[class*='job-title'],[class*='name']"
@@ -2310,8 +2935,44 @@ function communicationButtonMatchesJob(button, job) {
     detailText.includes(targetTitle)
     || headingTexts.some((text) => text.includes(targetTitle) || targetTitle.includes(text))
   );
-  const companyMatched = targetCompany.length >= 2 && detailText.includes(targetCompany);
-  return titleMatched || companyMatched;
+  // Never identify a queue job by company alone. One company can have
+  // multiple cards and a broad detail container can include neighboring jobs.
+  return titleMatched;
+}
+
+function findJobForCommunicationButton(button) {
+  const detail = findJobDetailScope(button);
+  const detailJobId = bossJobIdForCommunicationButton(button, detail);
+  if (detailJobId) {
+    return JC_STATE.jobs.find((job) => bossJobIdFromUrl(job.url) === detailJobId) || null;
+  }
+  const matches = JC_STATE.jobs.filter((job) => communicationButtonMatchesJob(button, job));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function bossJobIdFromUrl(value) {
+  try {
+    const url = new URL(String(value || ""), "https://www.zhipin.com");
+    if (url.hostname !== "www.zhipin.com") return "";
+    return url.pathname.match(/\/job_detail\/([^/?#]+)/i)?.[1] || "";
+  } catch {
+    return String(value || "").match(/\/job_detail\/([^/?#]+)/i)?.[1] || "";
+  }
+}
+
+function bossJobIdForCommunicationButton(button, detail = findJobDetailScope(button)) {
+  const routeId = bossJobIdFromUrl(location.href);
+  if (routeId) return routeId;
+  if (!detail) return "";
+  const detailLinks = Array.from(detail.querySelectorAll("a[href*='/job_detail/']"));
+  const primary = detailLinks.find((link) => /查看更多信息|职位详情|查看详情/.test(
+    cleanText(link.innerText || link.textContent || "")
+  ));
+  if (primary) return bossJobIdFromUrl(primary.href || primary.getAttribute("href"));
+  const ids = [...new Set(detailLinks
+    .map((link) => bossJobIdFromUrl(link.href || link.getAttribute("href")))
+    .filter(Boolean))];
+  return ids.length === 1 ? ids[0] : "";
 }
 
 function findJobDetailScope(button) {
@@ -2388,12 +3049,24 @@ function logContactEvent(event, job) {
   });
 }
 
-async function requestAiAnalysis(job, payload) {
+function applyAnalysisPerformance(analysis, performance = {}) {
+  analysis.tokenUsage = performance.usage || {};
+  Object.assign(analysis.tokenUsage, {
+    analysisVisibleOutputTokens: Number(performance.analysisUsage?.visibleOutputTokens || 0),
+    repairVisibleOutputTokens: Number(performance.repairUsage?.visibleOutputTokens || 0),
+    requestCount: Number(performance.requestCount || 1),
+    repairMethod: String(performance.repairMethod || "none"),
+    durationMs: Number(performance.durationMs || 0)
+  });
+  return analysis;
+}
+
+async function requestAiAnalysis(job, payload, options = {}) {
   const startedAt = Date.now();
-  const baseDetail = `jobIndex=${Number(job?.index ?? -1)}`;
+  const baseDetail = `jobIndex=${Number(job?.index ?? -1)};source=${String(options.source || "queue")}`;
   logAutomationEvent("ai_analysis_started", { job, detail: baseDetail });
 
-  const progressTimer = setInterval(() => {
+  const progressTimer = options.updateGlobalStatus === false ? null : setInterval(() => {
     const elapsedSeconds = Math.max(1, Math.floor((Date.now() - startedAt) / 1000));
     setStatus(`AI 分析中（已等待 ${elapsedSeconds} 秒）：${job.title}`);
   }, 5000);
@@ -2401,8 +3074,9 @@ async function requestAiAnalysis(job, payload) {
   try {
     const response = await sendMessage({ type: "analyzeJob", payload });
     const durationMs = Date.now() - startedAt;
+    const usage = response?.performance?.usage;
     const diagnosticDetail = response?.ok
-      ? ""
+      ? `;providerDurationMs=${Number(response?.performance?.durationMs || durationMs)};repairMethod=${String(response?.performance?.repairMethod || "none")};requestCount=${Number(response?.performance?.requestCount || 1)};inputTokens=${Number(usage?.inputTokens || 0)};visibleOutputTokens=${Number(usage?.visibleOutputTokens || 0)};reasoningTokens=${Number(usage?.reasoningTokens || 0)};totalTokens=${Number(usage?.totalTokens || 0)}`
       : `;diagnostic=${JSON.stringify(aiErrorDiagnostic(response?.error || "分析失败"))}`;
     logAutomationEvent(response?.ok ? "ai_analysis_completed" : "ai_analysis_failed", {
       job,
@@ -2417,11 +3091,11 @@ async function requestAiAnalysis(job, payload) {
     });
     throw error;
   } finally {
-    clearInterval(progressTimer);
+    if (progressTimer) clearInterval(progressTimer);
   }
 }
 
-function createStayOnCurrentPageWaiter(timeoutMs = 10000) {
+function createStayOnCurrentPageWaiter(timeoutMs = 10000, expectedJob = null) {
   let settled = false;
   let confirmationClicked = false;
   let observer = null;
@@ -2453,11 +3127,14 @@ function createStayOnCurrentPageWaiter(timeoutMs = 10000) {
     const button = findStayOnCurrentPageButton();
     if (button) {
       confirmationClicked = true;
+      const dialogConfirmedSend = stayOnPageDialogConfirmsSend(button);
       safeClick(button);
-      setTimeout(() => finish("stayed"), 300);
+      setTimeout(() => finish(dialogConfirmedSend || hasSuccessfulContactEvidence(expectedJob)
+        ? "stayed_confirmed"
+        : "stayed"), 300);
       return;
     }
-    if (hasSuccessfulContactEvidence()) finish("stayed");
+    if (hasSuccessfulContactEvidence(expectedJob)) finish("stayed");
   };
   const scheduleProbe = (immediate = false) => {
     if (settled || confirmationClicked || probeTimer) return;
@@ -2489,12 +3166,13 @@ function createStayOnCurrentPageWaiter(timeoutMs = 10000) {
   };
 }
 
-function hasSuccessfulContactEvidence() {
+function hasSuccessfulContactEvidence(expectedJob = null) {
   const controls = Array.from(document.querySelectorAll("a,button"));
   const changedControl = controls.some((item) => {
     if (isInsideJobCopilot(item) || !isElementVisible(item)) return false;
     const text = cleanText(item.innerText || item.textContent || "");
-    return /^(继续沟通|继续聊|已沟通|发消息)$/.test(text);
+    if (!/^(继续沟通|继续聊|再次沟通|已沟通|发消息)$/.test(text)) return false;
+    return !expectedJob || communicationButtonMatchesJob(item, expectedJob);
   });
   if (changedControl) return true;
   const statusNodes = Array.from(document.querySelectorAll(CONTACT_STATUS_SELECTOR));
@@ -2514,6 +3192,15 @@ function findStayOnCurrentPageButton() {
   });
 }
 
+function stayOnPageDialogConfirmsSend(button) {
+  const dialog = button?.closest?.(
+    "[role='dialog'], .dialog, .modal, .boss-dialog, [class*='dialog'], [class*='modal']"
+  );
+  if (!dialog) return false;
+  return /已向BOSS发送消息|消息发送成功|消息已发送|招呼已发送|已与BOSS沟通|已发起沟通/
+    .test(cleanText(dialog.textContent || dialog.innerText || ""));
+}
+
 function findCards() {
   for (const selector of JOB_CARD_SELECTORS) {
     const cards = Array.from(document.querySelectorAll(selector));
@@ -2526,7 +3213,7 @@ function findCommunicationButtons(root) {
   const items = Array.from(root.querySelectorAll("a,button"));
   return items.filter((item) => !isInsideJobCopilot(item)
     && isElementVisible(item)
-    && /^(立即沟通|继续沟通|继续聊)$/.test(cleanText(item.innerText || item.textContent || "")));
+    && /^(立即沟通|继续沟通|继续聊|再次沟通)$/.test(cleanText(item.innerText || item.textContent || "")));
 }
 
 function findCommunicationButtonForJob(job) {
@@ -2854,9 +3541,14 @@ function buildJobTextForAi(job) {
 }
 
 async function collectJobDescriptionForAnalysis(job) {
+  const startedAt = Date.now();
   const cardText = buildJobTextForAi(job);
   const selected = await selectJobDetail(job);
   if (!selected) {
+    logAutomationEvent("job_detail_collected", {
+      job,
+      detail: `durationMs=${Date.now() - startedAt};complete=false;length=${cardText.length}`
+    });
     return { text: cardText, complete: false };
   }
   const communicateButton = findCommunicationButtonForJob(job);
@@ -2865,8 +3557,16 @@ async function collectJobDescriptionForAnalysis(job) {
     .replace(/[█▉▊▋▌▍▎▏■]+/g, "")
     .slice(0, 9000);
   if (detailText.length < 80) {
+    logAutomationEvent("job_detail_collected", {
+      job,
+      detail: `durationMs=${Date.now() - startedAt};complete=false;length=${cardText.length}`
+    });
     return { text: cardText, complete: false };
   }
+  logAutomationEvent("job_detail_collected", {
+    job,
+    detail: `durationMs=${Date.now() - startedAt};complete=true;length=${detailText.length}`
+  });
   return {
     text: `【岗位卡片】\n${cardText}\n\n【完整职位详情】\n${detailText}`,
     complete: true

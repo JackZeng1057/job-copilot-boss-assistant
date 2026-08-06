@@ -14,6 +14,8 @@ const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/
     minScore: 60,
     profile: ["default"],
     currentLocation: "示例城市示例区",
+    experienceYears: 2.5,
+    graduateStatus: "graduate",
     targetDirections: "通用技能",
     excludedDirections: "电话销售",
     customInstructions: "",
@@ -40,8 +42,14 @@ const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/
           score: 40,
           decision: "manual_review",
           excluded: false,
+          exclusion_match: "",
+          exclusion_reason: "未命中排除项",
+          occupation_family: "软件开发",
+          target_alignment: "direct",
           reasons: ["fixture"],
-          location_fit: "unclear"
+          risks: ["经验年限待确认"],
+          location_fit: "unclear",
+          greeting: "您好，我有相关项目经验，希望进一步沟通。"
         }) } }]
     };
     return { ok: true, text: async () => JSON.stringify(data) };
@@ -83,8 +91,14 @@ const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/
   assert.match(requestedPrompt, /从简历动态识别用户已有的技能/);
   assert.match(requestedPrompt, /所有已勾选简历/);
   assert.match(requestedPrompt, /示例城市示例区/);
+  assert.match(requestedPrompt, /【前台求职配置：个人经验与应届状态】\s*工作经验年限：2\.5 年；应届身份：应届生/);
+  assert.match(requestedPrompt, /经验年限与应届身份合计 0-6 分/);
   assert.match(requestedPrompt, /【前台求职配置：绝不投递岗位\/职业类型】\s*电话销售/);
   assert.match(requestedPrompt, /扩展只会把 score 限制在 0-100/);
+  assert.match(requestedPrompt, /快速批量评分/);
+  assert.match(requestedPrompt, /reasons[^\n]*最多 3 条/);
+  assert.doesNotMatch(requestedPrompt, /"resume_tips"|"qa"/,
+    "batch scoring must not ask every provider to generate unused fields");
   console.log("balanced AI scoring prompt regression test passed");
 })().catch((error) => {
   console.error(error);

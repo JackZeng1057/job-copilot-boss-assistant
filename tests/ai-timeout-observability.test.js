@@ -16,6 +16,8 @@ const timeoutHelperSource = backgroundSource.match(
   /async function fetchAiResponse[\s\S]*?\n\}/
 );
 assert.ok(timeoutConstantSource && timeoutHelperSource, "AI requests must have a shared timeout helper");
+assert.match(timeoutConstantSource[0], /60000/,
+  "one provider request must stop after 60 seconds so a job cannot spend minutes in model repair loops");
 
 const timeoutSandbox = {
   AbortController,
@@ -66,7 +68,8 @@ vm.runInNewContext(
   );
 
   const providerCalls = backgroundSource.match(/await fetchAiResponse\(/g) || [];
-  assert.equal(providerCalls.length, 4, "all four AI provider protocols must use the timeout helper");
+  assert.equal(providerCalls.length, 5,
+    "all four AI protocols and the structured-output compatibility fallback must use the timeout helper");
 
   console.log("AI timeout and observability tests passed");
 })().catch((error) => {

@@ -55,6 +55,8 @@ async function runScenario(storageErrorMessage) {
   });
   assert.equal(response.ok, true);
   assert.equal(response.settings.restrictTargetLocation, false);
+  assert.equal(response.settings.experienceYears, "");
+  assert.equal(response.settings.graduateStatus, "unspecified");
   assert.deepEqual(Array.from(response.settings.profile), ["default"]);
   assert.equal(response.settings.apiKey, undefined);
   assert.equal(response.settings.resumeDefault, undefined);

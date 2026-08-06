@@ -9,11 +9,14 @@ const fields = {
   apiBaseUrl: document.getElementById("apiBaseUrl"),
   apiKey: document.getElementById("apiKey"),
   model: document.getElementById("model"),
+  analysisSpeed: document.getElementById("analysisSpeed"),
   minScore: document.getElementById("minScore"),
   profileDefault: document.getElementById("profileDefault"),
   profileAltA: document.getElementById("profileAltA"),
   profileAltB: document.getElementById("profileAltB"),
   currentLocation: document.getElementById("currentLocation"),
+  experienceYears: document.getElementById("experienceYears"),
+  graduateStatus: document.getElementById("graduateStatus"),
   targetDirections: document.getElementById("targetDirections"),
   excludedDirections: document.getElementById("excludedDirections"),
   customInstructions: document.getElementById("customInstructions"),
@@ -47,9 +50,12 @@ const defaults = {
   apiBaseUrl: "https://api.deepseek.com",
   apiKey: "",
   model: "deepseek-v4-flash",
+  analysisSpeed: "fast",
   minScore: 60,
   profile: "default",
   currentLocation: "",
+  experienceYears: "",
+  graduateStatus: "unspecified",
   targetDirections: "",
   excludedDirections: "",
   customInstructions: "",
@@ -76,9 +82,12 @@ chrome.storage.local.get(
     fields.apiBaseUrl.value = stored.apiBaseUrl;
     fields.apiKey.value = stored.apiKey;
     fields.model.value = stored.model;
+    fields.analysisSpeed.value = normalizeAnalysisSpeed(stored.analysisSpeed);
     fields.minScore.value = stored.minScore;
     setSelectedProfiles(stored.profile);
     fields.currentLocation.value = stored.currentLocation;
+    fields.experienceYears.value = normalizeExperienceYears(stored.experienceYears);
+    fields.graduateStatus.value = normalizeGraduateStatus(stored.graduateStatus);
     fields.targetDirections.value = stored.targetDirections;
     fields.excludedDirections.value = stored.excludedDirections;
     fields.customInstructions.value = stored.customInstructions;
@@ -143,9 +152,12 @@ document.getElementById("save").addEventListener("click", async () => {
     apiBaseUrl,
     apiKey: fields.apiKey.value.trim(),
     model,
+    analysisSpeed: normalizeAnalysisSpeed(fields.analysisSpeed.value),
     minScore,
     profile: selectedProfiles(),
     currentLocation: fields.currentLocation.value.trim(),
+    experienceYears: normalizeExperienceYears(fields.experienceYears.value),
+    graduateStatus: normalizeGraduateStatus(fields.graduateStatus.value),
     targetDirections: fields.targetDirections.value.trim(),
     excludedDirections: fields.excludedDirections.value.trim(),
     customInstructions: fields.customInstructions.value.trim(),
@@ -165,6 +177,21 @@ document.getElementById("save").addEventListener("click", async () => {
     }
   );
 });
+
+function normalizeExperienceYears(value) {
+  if (String(value ?? "").trim() === "") return "";
+  const years = Number(value);
+  if (!Number.isFinite(years)) return "";
+  return Math.round(Math.max(0, Math.min(50, years)) * 10) / 10;
+}
+
+function normalizeGraduateStatus(value) {
+  return ["graduate", "experienced"].includes(value) ? value : "unspecified";
+}
+
+function normalizeAnalysisSpeed(value) {
+  return ["balanced", "accurate"].includes(value) ? value : "fast";
+}
 
 function apiOriginPattern(value) {
   const url = new URL(String(value || "").trim());
