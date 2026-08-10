@@ -672,15 +672,10 @@ async function stabilizeProtectedJobsRoute(tabId, protectedJobsUrl = "") {
     if (isAutomationJobsUrl(finalUrl)) consecutiveJobsChecks += 1;
     else consecutiveJobsChecks = 0;
   }
-  const stillEscaped = isBossChatUrl(finalUrl) || isBossJobDetailUrl(finalUrl);
-  if (stillEscaped && isAutomationJobsUrl(protectedJobsUrl)) {
-    const restoredTab = await updateTab(tabId, { url: protectedJobsUrl }).catch(() => null);
-    if (restoredTab) {
-      jobsUrlFallback = true;
-      finalUrl = String(restoredTab.url || protectedJobsUrl);
-      consecutiveJobsChecks = isAutomationJobsUrl(finalUrl) ? 2 : 0;
-    }
-  }
+  // Never reload the saved jobs URL as a recovery fallback. A reload destroys
+  // BOSS's in-memory result list and filters. The main-world Navigation API
+  // guard prevents new escapes; if a legacy browser still escapes and cannot
+  // go back, leave the session paused without mutating the tab again.
   return {
     historyBack,
     historyBackAttempted,

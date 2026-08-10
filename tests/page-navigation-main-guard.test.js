@@ -16,7 +16,10 @@ const sandbox = {
     dispatchEvent() {}
   },
   window: {
-    open(...args) { calls.push(["window.open", ...args]); }
+    open(...args) { calls.push(["window.open", ...args]); },
+    navigation: {
+      addEventListener(type, listener) { listeners.set(`navigation:${type}`, listener); }
+    }
   },
   history: {
     pushState(...args) { calls.push(["pushState", ...args]); },
@@ -26,6 +29,15 @@ const sandbox = {
 
 vm.runInNewContext(source, sandbox);
 listeners.get("job-copilot-owner-navigation-guard-start")({ detail: { durationMs: 12000 } });
+let navigationPrevented = false;
+listeners.get("navigation:navigate")({
+  destination: { url: "https://www.zhipin.com/web/geek/chat" },
+  navigationType: "push",
+  cancelable: true,
+  preventDefault() { navigationPrevented = true; }
+});
+assert.equal(navigationPrevented, true,
+  "the guard must cancel a browser-level navigation before the jobs document unloads");
 sandbox.history.pushState({}, "", "/web/geek/chat");
 sandbox.history.replaceState({}, "", "/job_detail/abc.html");
 sandbox.window.open("/job_detail/new-tab.html", "_blank");

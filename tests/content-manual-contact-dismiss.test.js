@@ -74,26 +74,40 @@ const manualButton = new FakeElement("立即沟通");
 const event = {
   isTrusted: true,
   target: manualButton,
+  get defaultPrevented() { return prevented > 0; },
   preventDefault() { prevented += 1; },
   stopImmediatePropagation() { stopped += 1; }
 };
 
 assert.equal(sandbox.handleManualJobContactClick(event), true);
-assert.equal(prevented, 0, "the real immediate-contact click must reach BOSS unchanged");
+assert.equal(prevented, 1,
+  "the trusted click must cancel native navigation during capture before BOSS can route the jobs tab");
 assert.equal(stopped, 0, "the real immediate-contact click must keep propagating");
 assert.equal(directCalls.length, 1);
 assert.equal(directCalls[0].value.key, job.key);
 sandbox.containTrustedManualContactNavigation(event);
 assert.equal(prevented, 1,
-  "the document bubble boundary must cancel only the anchor's native navigation after BOSS handlers run");
+  "the document bubble cleanup must not be the first navigation boundary");
 assert.equal(stopped, 0);
+
+const modernEvent = {
+  isTrusted: true,
+  target: manualButton,
+  defaultPrevented: false,
+  preventDefault() { throw new Error("modern Chromium must leave the trusted click unchanged"); },
+  stopImmediatePropagation() { throw new Error("trusted click propagation must not stop"); }
+};
+sandbox.window = { navigation: {} };
+assert.equal(sandbox.handleManualJobContactClick(modernEvent), true);
+assert.equal(directCalls.length, 2,
+  "the Navigation API path must still hand the original trusted click to BOSS");
 
 mappedJob = null;
 assert.equal(sandbox.handleManualJobContactClick(event), true,
   "an unmapped communication control must still be contained on the jobs page");
 assert.equal(prevented, 2);
 assert.equal(stopped, 1);
-assert.equal(directCalls.length, 1, "an ambiguous job must never remove or contact another queue item");
+assert.equal(directCalls.length, 2, "an ambiguous job must never remove or contact another queue item");
 assert.match(latestStatus, /无法确认.*岗位|未识别.*岗位/);
 
 console.log("Manual contact queue identity tests passed");

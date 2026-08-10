@@ -128,7 +128,7 @@ async function runNavigationScenario(contactInFlight, targetUrl = "https://www.z
     assert.equal(fallbackUpdates[0].changes.url, jobsUrl);
   } else {
     assert.equal(fallbackUpdates.length, 0,
-      "the extension must not reload a saved jobs URL when history recovery succeeds");
+      "the extension must never reload a saved jobs URL during route recovery");
   }
   assert.deepEqual(Array.from(saved.completedJobKeys), ["job:previous"]);
   assert.equal(saved.active, isProtectedEscape ? true : false);
@@ -294,8 +294,7 @@ async function runManualChatScenario(existingChatTab = null) {
   });
   await runNavigationScenario(false, "https://www.zhipin.com/web/geek/chat", {
     goBackFails: true,
-    expectHistoryBack: true,
-    expectJobsUrlFallback: true
+    expectHistoryBack: true
   });
   await runNavigationScenario(false, "https://www.zhipin.com/web/geek/chat", {
     currentTabUrl: "https://www.zhipin.com/job_detail/route-changed-during-recovery.html",

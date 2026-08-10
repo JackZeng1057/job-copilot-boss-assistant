@@ -208,6 +208,11 @@ function handleManualJobContactClick(event) {
     openExistingConversationInCompanion(job);
     return true;
   }
+  // Modern Chromium's main-world Navigation API guard cancels the navigation
+  // without changing this click's defaultPrevented flag, so BOSS receives the
+  // trusted event unchanged. Older browsers fall back to cancelling the link
+  // default during capture; preventDefault() still allows propagation.
+  if (typeof window === "undefined" || !window.navigation) event.preventDefault();
   // Keep the user's original trusted event alive so BOSS can execute its real
   // communication handler. Synthetic element.click() is not an equivalent
   // substitute and can be ignored by production event guards.
@@ -231,7 +236,7 @@ function containTrustedManualContactNavigation(event) {
   // anchor's native default navigation. SPA history/window routes are covered
   // by the main-world guard started synchronously in the capture listener.
   const anchor = event.target instanceof Element ? event.target.closest("a[href]") : null;
-  if (anchor) event.preventDefault();
+  if (anchor && !event.defaultPrevented) event.preventDefault();
 }
 
 async function contactManuallyWithoutOwnerNavigation(job) {
@@ -1971,13 +1976,12 @@ async function contactQualifiedJob(job, context) {
     return "continue";
   }
   if (result === "manual_required") {
-    const detail = "BOSS 未接受脚本触发，请在当前职位页手动点击一次“立即沟通”；插件会自动点击“留在此页”并继续队列";
+    const detail = "BOSS 未接受本次脚本触发，已保留该岗位并继续处理后续岗位";
     setJobProgress(job, "attention", detail);
-    JC_STATE.pipeline.allPaused = true;
-    JC_STATE.pipeline.phase = "paused";
-    setStatus(detail);
+    completeJob(job);
+    setStatus(`${detail}：${job.title}。`);
     renderList();
-    return "pause";
+    return "continue";
   }
   const blockingMessage = {
     blocked_rate: "BOSS 提示操作频繁，已暂停后续岗位。",

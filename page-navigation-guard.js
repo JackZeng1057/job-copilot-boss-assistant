@@ -41,6 +41,18 @@
     }
     return originalWindowOpen(url, ...args);
   };
+  // The Navigation API fires for link, Location, History and browser-initiated
+  // navigations. Cancelling here prevents the jobs document from unloading,
+  // so recovery never needs to refresh the saved jobs URL.
+  // Source: https://developer.chrome.com/docs/web-platform/navigation-api
+  window.navigation?.addEventListener("navigate", (event) => {
+    const destinationUrl = event.destination?.url;
+    if (!shouldBlock(destinationUrl) || event.navigationType === "traverse" || !event.cancelable) return;
+    event.preventDefault();
+    document.dispatchEvent(new CustomEvent(BLOCKED_EVENT, {
+      detail: { method: "navigation.preventDefault", url: String(destinationUrl) }
+    }));
+  });
   document.addEventListener(START_EVENT, (event) => {
     if (event.detail?.persistent === true) persistentGuard = true;
     const durationMs = Math.max(1000, Math.min(20000, Number(event.detail?.durationMs) || 12000));
