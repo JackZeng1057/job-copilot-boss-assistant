@@ -24,9 +24,9 @@ const manualRequired = handler.slice(
 );
 assert.ok(manualRequired.length > 0, "the script-rejection outcome must be handled explicitly");
 assert.match(manualRequired, /completeJob\(job\)[\s\S]*return ["']continue["']/,
-  "a rejected synthetic click must retain the job result and continue the queue");
+  "an unconfirmed native click must retain the job result and continue the queue");
 assert.doesNotMatch(manualRequired, /pipeline\.allPaused\s*=\s*true|return ["']pause["']/,
-  "a single untrusted-click rejection must never pause all later jobs");
+  "a single unconfirmed click must never pause all later jobs");
 assert.match(handler, /blocked_rate:[\s\S]*blocked_limit:[\s\S]*blocked_security:/,
   "platform throttling, quota and security checks must be reported separately");
 assert.match(handler, /blocked_rate:[\s\S]*pipeline\.allPaused = true/,

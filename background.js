@@ -61,6 +61,7 @@ const ANALYSIS_JSON_SCHEMA = {
 const automationStorage = chrome.storage.session || chrome.storage.local;
 const disposableContactTabIds = new Set();
 const ownerRouteRecoveryTabIds = new Set();
+const nativeContactTabIds = new Set();
 const unsupportedReasoningCapabilityKeys = new Set();
 
 function consumeRuntimeLastError() {
@@ -128,6 +129,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === "openManualChatTab") {
     openOrFocusManualChatTab(sender.tab)
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
+    return true;
+  }
+  if (message?.type === "dispatchTrustedContactClick") {
+    dispatchTrustedContactClick(sender.tab, message)
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
     return true;
@@ -321,6 +328,63 @@ async function clearAutomationSessionForTab(tabId) {
   await storageRemove(automationStorage, AUTOMATION_SESSION_KEY);
   await setTabAutoDiscardable(tabId, true);
   return true;
+}
+
+async function dispatchTrustedContactClick(senderTab, payload) {
+  if (!senderTab?.id || !isAutomationJobsUrl(senderTab.url || "")) {
+    throw new Error("原生点击只能从 BOSS 职位页发起");
+  }
+  if (nativeContactTabIds.has(senderTab.id)) {
+    throw new Error("当前职位页已有原生点击正在执行");
+  }
+
+  const pageUrl = new URL(String(payload?.pageUrl || ""));
+  const senderUrl = new URL(String(senderTab.url || ""));
+  if (pageUrl.origin !== senderUrl.origin
+    || pageUrl.pathname !== senderUrl.pathname
+    || pageUrl.search !== senderUrl.search) {
+    throw new Error("职位页面已经变化，已拒绝过期点击");
+  }
+  if (!isBossJobDetailUrl(String(payload?.jobUrl || ""))) {
+    throw new Error("原生点击缺少有效的 BOSS 岗位标识");
+  }
+  const jobKey = String(payload?.jobKey || "");
+  if (!jobKey || jobKey.length > 240) throw new Error("原生点击岗位标识无效");
+
+  const x = Number(payload?.x);
+  const y = Number(payload?.y);
+  const maxX = Number.isFinite(Number(senderTab.width)) ? Number(senderTab.width) : 10000;
+  const maxY = Number.isFinite(Number(senderTab.height)) ? Number(senderTab.height) : 10000;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > maxX || y > maxY) {
+    throw new Error("原生点击坐标超出当前标签页视口");
+  }
+
+  const debuggee = { tabId: senderTab.id };
+  let attached = false;
+  nativeContactTabIds.add(senderTab.id);
+  try {
+    // chrome.debugger is the extension transport for CDP. Only the Input
+    // domain is used and the session is detached immediately after one click.
+    // Source: https://developer.chrome.com/docs/extensions/reference/api/debugger
+    await debuggerAttach(debuggee);
+    attached = true;
+    await debuggerSendCommand(debuggee, "Input.dispatchMouseEvent", {
+      type: "mouseMoved", x, y, button: "none", buttons: 0
+    });
+    await debuggerSendCommand(debuggee, "Input.dispatchMouseEvent", {
+      type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1
+    });
+    await debuggerSendCommand(debuggee, "Input.dispatchMouseEvent", {
+      type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1
+    });
+    return { dispatched: true };
+  } finally {
+    try {
+      if (attached) await debuggerDetach(debuggee);
+    } finally {
+      nativeContactTabIds.delete(senderTab.id);
+    }
+  }
 }
 
 async function openOrFocusManualChatTab(senderTab) {
@@ -728,6 +792,30 @@ function queryTabs(queryInfo) {
     const error = consumeRuntimeLastError();
     if (error) reject(new Error(error.message));
     else resolve(Array.isArray(tabs) ? tabs : []);
+  }));
+}
+
+function debuggerAttach(target) {
+  return new Promise((resolve, reject) => chrome.debugger.attach(target, "0.1", () => {
+    const error = consumeRuntimeLastError();
+    if (error) reject(new Error(error.message));
+    else resolve();
+  }));
+}
+
+function debuggerSendCommand(target, method, params = {}) {
+  return new Promise((resolve, reject) => chrome.debugger.sendCommand(target, method, params, (result) => {
+    const error = consumeRuntimeLastError();
+    if (error) reject(new Error(error.message));
+    else resolve(result);
+  }));
+}
+
+function debuggerDetach(target) {
+  return new Promise((resolve, reject) => chrome.debugger.detach(target, () => {
+    const error = consumeRuntimeLastError();
+    if (error) reject(new Error(error.message));
+    else resolve();
   }));
 }
 

@@ -98,6 +98,7 @@ let manualChatHitbox = null;
 let manualChatOpenAt = 0;
 let hiddenContactFrame = null;
 const manualContactInFlightKeys = new Set();
+const nativeAutomationContactKeys = new Set();
 const trustedManualContactEvents = new WeakSet();
 const frameworkSalaryCache = new WeakMap();
 
@@ -195,6 +196,14 @@ function handleManualJobContactClick(event) {
     } else {
       setStatus("无法确认当前沟通按钮对应的队列岗位，已阻止页面跳转；请重新扫描后再试。");
     }
+    return true;
+  }
+  if (nativeAutomationContactKeys.has(job.key)) {
+    // The browser-level input is trusted, so it passes through this same
+    // capture boundary. Reuse the navigation containment but leave success
+    // ownership with communicateOnOwnerPage to avoid two competing waiters.
+    trustedManualContactEvents.add(event);
+    if (typeof window === "undefined" || !window.navigation) event.preventDefault();
     return true;
   }
   if (manualContactInFlightKeys.has(job.key)) {
@@ -1976,7 +1985,7 @@ async function contactQualifiedJob(job, context) {
     return "continue";
   }
   if (result === "manual_required") {
-    const detail = "BOSS 未接受本次脚本触发，已保留该岗位并继续处理后续岗位";
+    const detail = "BOSS 未返回明确的沟通成功确认，已保留该岗位并继续处理后续岗位";
     setJobProgress(job, "attention", detail);
     completeJob(job);
     setStatus(`${detail}：${job.title}。`);
@@ -2729,7 +2738,7 @@ async function communicateOnOwnerPage(job, button = findCommunicationButtonForJo
     detail: { durationMs: HIDDEN_CONTACT_FRAME_TIMEOUT_MS }
   }));
   try {
-    clickOnOwnerPage(button);
+    await dispatchNativeContactClick(job, button);
     const result = await waiter.promise;
     if (result === "chat_route" || isBossChatUrl(location.href) || isBossJobDetailUrl(location.href)) {
       const restored = await restoreManualOwnerJobsRoute(ownerJobsUrl);
@@ -2737,9 +2746,8 @@ async function communicateOnOwnerPage(job, button = findCommunicationButtonForJo
       return manualCommunicationConfirmed(job) ? "stayed_confirmed" : "owner_route_escape";
     }
     if (result === "stay_missing" && !manualCommunicationConfirmed(job)) {
-      // A browser extension cannot manufacture a trusted mouse event.  Keep
-      // the job in the queue and let the existing trusted manual-click path
-      // observe the real BOSS dialog instead of guessing success.
+      // The browser-level click was delivered, but BOSS exposed no positive
+      // confirmation. Keep the job for review instead of guessing success.
       return "manual_required";
     }
     return result;
@@ -2749,33 +2757,38 @@ async function communicateOnOwnerPage(job, button = findCommunicationButtonForJo
   }
 }
 
-function clickOnOwnerPage(node) {
-  if (!node) return false;
-  const anchor = node.closest?.("a[href]");
-  const href = anchor?.getAttribute?.("href") || "";
-  const originalTarget = anchor?.getAttribute?.("target");
-  const originalRel = anchor?.getAttribute?.("rel");
-  if (anchor) {
-    anchor.setAttribute("target", "_self");
-    anchor.setAttribute("rel", "noopener noreferrer");
-    if (/\/job_detail\/|\/web\/geek\/chat/.test(href)) {
-      anchor.addEventListener("click", (event) => event.preventDefault(), {
-        capture: true,
-        once: true
-      });
+async function dispatchNativeContactClick(job, button) {
+  if (!button?.isConnected || !isElementVisible(button) || !communicationButtonMatchesJob(button, job)) {
+    throw new Error("立即沟通按钮已变化，已取消原生点击");
+  }
+  const rect = button.getBoundingClientRect();
+  const x = rect.left + (rect.width / 2);
+  const y = rect.top + (rect.height / 2);
+  if (rect.width < 2 || rect.height < 2 || x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) {
+    throw new Error("立即沟通按钮不在当前可点击视口内");
+  }
+  const hit = document.elementFromPoint(x, y);
+  if (!hit || (hit !== button && !button.contains(hit))) {
+    throw new Error("立即沟通按钮被其他页面元素遮挡");
+  }
+
+  nativeAutomationContactKeys.add(job.key);
+  try {
+    const response = await sendMessage({
+      type: "dispatchTrustedContactClick",
+      x,
+      y,
+      pageUrl: location.href,
+      jobKey: job.key,
+      jobUrl: job.url
+    });
+    if (!response?.ok || response.dispatched !== true) {
+      throw new Error(response?.error || "浏览器原生点击未执行");
     }
+    return true;
+  } finally {
+    nativeAutomationContactKeys.delete(job.key);
   }
-  preventJavascriptUrlDefaultOnce(node);
-  node.click();
-  if (anchor) {
-    setTimeout(() => {
-      if (originalTarget === null) anchor.removeAttribute("target");
-      else anchor.setAttribute("target", originalTarget);
-      if (originalRel === null) anchor.removeAttribute("rel");
-      else anchor.setAttribute("rel", originalRel);
-    }, 0);
-  }
-  return true;
 }
 
 async function performIsolatedCommunication(expectedJob = {}) {

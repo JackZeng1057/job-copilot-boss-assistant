@@ -13,6 +13,7 @@ for (const type of [
   "getAutomationSession",
   "focusAutomationTab",
   "openManualChatTab",
+  "dispatchTrustedContactClick",
   "controlAutomationTab",
   "appendAutomationLog"
 ]) {

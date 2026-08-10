@@ -47,8 +47,8 @@ assert.doesNotMatch(originalContact, /communicateInIsolatedTab/,
   "automatic communication must not create a separate detail tab");
 assert.match(originalContact, /createStayOnCurrentPageWaiter/,
   "the jobs tab must wait for the native BOSS confirmation dialog");
-assert.match(source, /function clickOnOwnerPage[\s\S]*\/web\\\/geek\\\/chat/,
-  "communication links must be prevented from opening a chat tab");
+assert.match(source, /nativeAutomationContactKeys\.has\(job\.key\)[\s\S]*trustedManualContactEvents\.add\(event\)/,
+  "native communication clicks must reuse the trusted-event navigation boundary");
 assert.doesNotMatch(originalContact, /communicateInHiddenFrame|communicateInIsolatedTab/,
   "the jobs tab must not delegate communication to a detail tab");
 const manualChatHandler = source.slice(

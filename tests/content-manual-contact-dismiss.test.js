@@ -58,6 +58,7 @@ const sandbox = {
   cleanText: (value) => String(value || "").trim(),
   findJobForCommunicationButton: () => mappedJob,
   manualContactInFlightKeys: new Set(),
+  nativeAutomationContactKeys: new Set(),
   trustedManualContactEvents: new WeakSet(),
   contactManuallyWithoutOwnerNavigation(value) { directCalls.push({ value }); },
   openExistingConversationInCompanion() {},

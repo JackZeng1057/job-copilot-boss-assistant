@@ -28,8 +28,8 @@ assert.match(contact, /existing_conversation_skipped[\s\S]*return ["']already_co
   "existing conversations must be recorded without clicking the chat control");
 assert.match(contact, /createStayOnCurrentPageWaiter/,
   "owner-page communication must wait for the BOSS stay-on-page dialog");
-assert.match(contact, /clickOnOwnerPage\(button\)/,
-  "owner-page communication must use the contained click path");
+assert.match(contact, /dispatchNativeContactClick\(job, button\)/,
+  "owner-page communication must use the browser-native click path");
 assert.match(contact, /const ownerJobsUrl = location\.href/,
   "automatic communication must retain the exact owner jobs URL before clicking");
 assert.match(contact, /(?:chat_route|isBossChatUrl)[\s\S]*restoreManualOwnerJobsRoute\(ownerJobsUrl\)/,

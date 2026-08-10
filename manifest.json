@@ -3,7 +3,7 @@
   "name": "Job Copilot BOSS 助手",
   "version": "0.9.5",
   "description": "在真实 BOSS 直聘页面内扫描岗位、AI 匹配简历，并在职位页完成达标岗位沟通。",
-  "permissions": ["storage", "tabs", "idle"],
+  "permissions": ["storage", "tabs", "idle", "debugger"],
   "host_permissions": [
     "https://www.zhipin.com/*",
     "https://api.deepseek.com/*"
