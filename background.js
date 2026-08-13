@@ -1,3 +1,5 @@
+// Service worker: coordinates AI analysis, persisted automation state, tabs,
+// navigation recovery, and browser-native communication clicks.
 const DEFAULT_SETTINGS = {
   aiProvider: "deepseek",
   apiProtocol: "openai_chat",
