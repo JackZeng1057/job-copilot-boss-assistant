@@ -9,7 +9,7 @@ assert.match(source, /只重新尝试沟通，不重复请求 AI/,
   "the UI must distinguish contact retry from AI reanalysis");
 
 const start = source.indexOf("async function retryContactForJob(key)");
-const end = source.indexOf("async function retryFailedJob", start);
+const end = source.indexOf("function jobProgressInfo", start);
 assert.ok(start >= 0 && end > start, "the contact-only retry workflow must exist");
 const retry = source.slice(start, end);
 assert.match(retry, /completedJobKeys\.delete\(job\.key\)/,

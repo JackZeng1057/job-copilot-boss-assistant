@@ -1,0 +1,92 @@
+name: Release
+
+# The version comes from manifest.json, so this file no longer needs editing for
+# each release. Commit the manifest bump with the message 发布<version> (for
+# example 发布1.0.1) and push to main, or run the workflow manually.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Read version from manifest
+        id: manifest
+        run: echo "version=$(jq -r .version manifest.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to release
+        id: gate
+        env:
+          VERSION: ${{ steps.manifest.outputs.version }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          elif [ "$COMMIT_MESSAGE" = "发布${VERSION}" ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping: commit message is not 发布${VERSION}"
+          fi
+
+      - name: Set up Node
+        if: steps.gate.outputs.release == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run tests
+        if: steps.gate.outputs.release == 'true'
+        run: node --test "tests/*.test.js"
+
+      - name: Build extension archive
+        if: steps.gate.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.manifest.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Stage only what the extension loads at runtime. Everything else —
+          # tests, docs, marketing assets, previous archives — stays out of the
+          # package users install.
+          mkdir -p dist/extension
+          cp manifest.json background.js content.js content.css \
+             popup.html popup.js page-navigation-guard.js LICENSE dist/extension/
+          cp -R vendor dist/extension/
+          # Icons are still pending; copy them once the directory lands.
+          if [ -d icons ]; then cp -R icons dist/extension/; fi
+          (cd dist/extension && zip -qr "../Job-Copilot-BOSS-Assistant-v${VERSION}.zip" .)
+          unzip -l "dist/Job-Copilot-BOSS-Assistant-v${VERSION}.zip" | tail -1
+
+      - name: Verify the archive carries no development files
+        if: steps.gate.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.manifest.outputs.version }}
+        run: |
+          set -euo pipefail
+          if unzip -l "dist/Job-Copilot-BOSS-Assistant-v${VERSION}.zip" \
+             | grep -Eq ' (tests|docs|marketing|output|\.playwright-cli|\.github)/'; then
+            echo "Development files leaked into the release archive" >&2
+            exit 1
+          fi
+
+      - name: Publish release
+        if: steps.gate.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.manifest.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "v${VERSION}" \
+            "dist/Job-Copilot-BOSS-Assistant-v${VERSION}.zip" \
+            --title "Job Copilot v${VERSION}" \
+            --notes-file CHANGELOG.md

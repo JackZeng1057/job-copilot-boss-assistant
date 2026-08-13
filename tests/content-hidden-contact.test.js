@@ -5,7 +5,7 @@ const source = fs.readFileSync(new URL("../content.js", `file://${__dirname}/`),
 const manifest = JSON.parse(fs.readFileSync(new URL("../manifest.json", `file://${__dirname}/`), "utf8"));
 
 const contactStart = source.indexOf("async function clickCommunicateForJob(job)");
-const contactEnd = source.indexOf("async function performIsolatedCommunication", contactStart);
+const contactEnd = source.indexOf("function communicationBlockStatus", contactStart);
 assert.ok(contactStart >= 0 && contactEnd > contactStart, "queue communication coordinator must exist");
 const contact = source.slice(contactStart, contactEnd);
 

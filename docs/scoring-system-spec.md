@@ -60,10 +60,8 @@ AI 参考用户配置、所有已勾选简历、完整 JD、岗位门槛、地�
   "target_alignment": "direct|transferable|unrelated|unclear",
   "reasons": [],
   "risks": [],
-  "resume_tips": [],
   "location_fit": "good|acceptable|unclear|poor",
-  "greeting": "",
-  "qa": []
+  "greeting": ""
 }
 ```
 

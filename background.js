@@ -34,22 +34,26 @@ const ANTHROPIC_REQUIRED_MAX_OUTPUT_TOKENS = 16384;
 const MAX_STORED_ANALYSES = 50;
 const MAX_RESUME_INPUT_CHARS = 16000;
 const MAX_JOB_DESCRIPTION_INPUT_CHARS = 7000;
-const ISOLATED_CONTACT_READY_TIMEOUT_MS = 15000;
-const ISOLATED_CONTACT_ACTION_TIMEOUT_MS = 30000;
 const OWNER_ROUTE_RECOVERY_CHECKPOINTS_MS = [300, 700, 1500, 3000];
+const MAX_ANALYSIS_REASONS = 3;
+const MAX_ANALYSIS_RISKS = 2;
+// Structured-output schemas reject numeric bounds (minimum/maximum) and array
+// bounds (maxItems) on both Anthropic and OpenAI; OpenAI's strict mode fails the
+// whole request. Keep the schema to types/enums and enforce the ranges locally
+// in normalizeAnalysis, which already clamps the score.
 const ANALYSIS_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
-    score: { type: "integer", minimum: 0, maximum: 100 },
+    score: { type: "integer" },
     decision: { type: "string", enum: ["recommend", "manual_review", "skip"] },
     excluded: { type: "boolean" },
     exclusion_match: { type: "string" },
     exclusion_reason: { type: "string" },
     occupation_family: { type: "string" },
     target_alignment: { type: "string", enum: ["direct", "transferable", "unrelated", "unclear"] },
-    reasons: { type: "array", items: { type: "string" }, maxItems: 3 },
-    risks: { type: "array", items: { type: "string" }, maxItems: 2 },
+    reasons: { type: "array", items: { type: "string" } },
+    risks: { type: "array", items: { type: "string" } },
     location_fit: { type: "string", enum: ["good", "acceptable", "unclear", "poor"] },
     greeting: { type: "string" }
   },
@@ -59,7 +63,6 @@ const ANALYSIS_JSON_SCHEMA = {
   ]
 };
 const automationStorage = chrome.storage.session || chrome.storage.local;
-const disposableContactTabIds = new Set();
 const ownerRouteRecoveryTabIds = new Set();
 const nativeContactTabIds = new Set();
 const unsupportedReasoningCapabilityKeys = new Set();
@@ -141,8 +144,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === "communicateInIsolatedTab") {
     // 1.0.0 no longer permits a job-detail tab for automatic communication.
-    // The content script uses a hidden same-origin frame on the owner jobs
-    // page; reject stale callers instead of silently reintroducing a tab.
+    // The content script uses a guarded native click on the owner jobs page;
+    // reject stale callers instead of silently reintroducing a worker tab.
     sendResponse({ ok: false, error: "isolated_detail_tabs_disabled" });
     return false;
   }
@@ -193,9 +196,10 @@ function storageGet(area, keys) {
 }
 
 function storageSet(area, values) {
-  return new Promise((resolve) => area.set(values, () => {
-    consumeRuntimeLastError();
-    resolve();
+  return new Promise((resolve, reject) => area.set(values, () => {
+    const error = consumeRuntimeLastError();
+    if (error) reject(new Error(error.message || "浏览器存储写入失败"));
+    else resolve();
   }));
 }
 
@@ -213,9 +217,19 @@ async function getAutomationSession() {
 }
 
 async function saveAutomationSession(session) {
-  const safeSession = sanitizeAutomationSession(session);
+  const safeSession = normalizeSessionContactMarker(sanitizeAutomationSession(session));
   await storageSet(automationStorage, { [AUTOMATION_SESSION_KEY]: safeSession });
   return safeSession;
+}
+
+function normalizeSessionContactMarker(session) {
+  const currentJobKey = String(session?.currentJobKey || "");
+  const contactInFlight = session?.contactInFlight === true && Boolean(currentJobKey);
+  return {
+    ...session,
+    contactInFlight,
+    currentJobKey: contactInFlight ? currentJobKey : ""
+  };
 }
 
 async function getJobsTabGuards() {
@@ -400,9 +414,7 @@ async function openOrFocusManualChatTab(senderTab) {
     url: ["https://www.zhipin.com/web/geek/chat*"],
     windowId: senderTab.windowId
   });
-  const existing = chatTabs.find((tab) => tab.id
-    && tab.id !== senderTab.id
-    && !disposableContactTabIds.has(tab.id));
+  const existing = chatTabs.find((tab) => tab.id && tab.id !== senderTab.id);
   if (existing) {
     try {
       await updateTab(existing.id, { active: true });
@@ -434,114 +446,6 @@ async function openOrFocusManualChatTab(senderTab) {
     page: chatTab?.url || "https://www.zhipin.com/web/geek/chat"
   }, senderTab.id);
   return { tabId: chatTab.id, reused: false };
-}
-
-async function communicateInIsolatedTab(senderTab, job) {
-  if (!senderTab?.id || !isAutomationJobsUrl(senderTab.url || "")) {
-    throw new Error("只能从 BOSS 职位页发起隔离沟通");
-  }
-  await registerJobsTabGuard(senderTab);
-  const workerUrl = isolatedContactUrl(job?.url);
-  const worker = await createTab({
-    url: workerUrl,
-    active: false,
-    windowId: senderTab.windowId,
-    openerTabId: senderTab.id,
-    index: Number.isInteger(senderTab.index) ? senderTab.index + 1 : undefined
-  });
-  if (!worker?.id) throw new Error("无法创建后台沟通标签");
-  if (worker.id === senderTab.id) throw new Error("后台沟通标签身份异常，已停止以保护职位页");
-  disposableContactTabIds.add(worker.id);
-  await setTabAutoDiscardable(worker.id, false);
-  await appendAutomationLog({
-    event: "isolated_contact_tab_opened",
-    title: job?.title,
-    page: workerUrl,
-    detail: `ownerTab=${senderTab.id};workerTab=${worker.id};active=false`
-  }, senderTab.id);
-
-  try {
-    const ready = await waitForIsolatedContactReady(worker.id, ISOLATED_CONTACT_READY_TIMEOUT_MS);
-    if (!ready) throw new Error("后台沟通页面加载超时");
-
-    const response = await sendTabMessageWithTimeout(worker.id, {
-      type: "performIsolatedCommunication",
-      expectedJob: {
-        key: String(job?.key || ""),
-        title: String(job?.title || ""),
-        company: String(job?.company || ""),
-        url: workerUrl
-      }
-    }, ISOLATED_CONTACT_ACTION_TIMEOUT_MS);
-
-    let status = response?.ok ? String(response.status || "") : "";
-    if (!status) {
-      const current = await getTab(worker.id).catch(() => null);
-      if (isBossChatUrl(current?.url || "")) status = "navigated_chat";
-    }
-    if (!status) throw new Error(response?.error || "后台沟通未返回结果");
-
-    await appendAutomationLog({
-      event: `isolated_contact_${status}`,
-      title: job?.title,
-      page: workerUrl,
-      detail: `ownerStayed=true;workerTab=${worker.id}`
-    }, senderTab.id);
-    return { status };
-  } finally {
-    await setTabAutoDiscardable(worker.id, true);
-    await removeDisposableContactTab(worker.id, senderTab.id);
-  }
-}
-
-async function removeDisposableContactTab(workerTabId, ownerTabId) {
-  if (!disposableContactTabIds.has(workerTabId) || workerTabId === ownerTabId) return false;
-  const tab = await getTab(workerTabId).catch(() => null);
-  if (!tab || tab.id !== workerTabId || tab.openerTabId !== ownerTabId) return false;
-  if (isAutomationJobsUrl(tab.url || "")) return false;
-  disposableContactTabIds.delete(workerTabId);
-  await removeTab(workerTabId).catch(() => {});
-  return true;
-}
-
-async function waitForIsolatedContactReady(tabId, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const response = await sendTabMessageWithTimeout(tabId, {
-      type: "inspectIsolatedCommunicationResult"
-    }, 1200);
-    if (response?.ok && response.ready) return true;
-    const tab = await getTab(tabId).catch(() => null);
-    if (!tab) return false;
-    await delay(250);
-  }
-  return false;
-}
-
-function sendTabMessageWithTimeout(tabId, message, timeoutMs) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(value);
-    };
-    const timer = setTimeout(() => finish({ ok: false, error: "后台沟通动作超时" }), timeoutMs);
-    chrome.tabs.sendMessage(tabId, message, (response) => {
-      const error = consumeRuntimeLastError();
-      if (error) finish({ ok: false, error: error.message });
-      else finish(response || { ok: false, error: "后台沟通页面没有响应" });
-    });
-  });
-}
-
-function isolatedContactUrl(value) {
-  const url = new URL(String(value || ""), "https://www.zhipin.com");
-  if (url.hostname !== "www.zhipin.com" || !/\/job_detail\//.test(url.pathname)) {
-    throw new Error("岗位缺少可用的 BOSS 详情链接");
-  }
-  return url.href;
 }
 
 function delay(ms) {
@@ -654,6 +558,7 @@ async function handleAutomationTabNavigation(tabId, url) {
         paused: true,
         progress,
         contactInFlight: false,
+        currentJobKey: "",
         status: enteredChat
           ? "职位标签误入消息页，已自动后退并暂停；消息页必须使用独立标签。"
           : "读取 JD 时职位标签误入详情页，已自动后退并暂停；请确认职位列表恢复后再继续。",
@@ -673,7 +578,7 @@ async function handleAutomationTabNavigation(tabId, url) {
       await appendAutomationLog({
         event: enteredChat ? "owner_chat_route_restored" : "owner_job_detail_route_restored",
         page: url,
-        detail: `restore=${recovery.jobsUrlFallback ? "background_jobs_url_fallback" : (recovery.historyBack ? "background_history.back" : "content_guard")};stable=${recovery.stable};final=${recovery.finalUrl};from=${protectedJobsUrl};automation=${ownsActiveSession ? "paused" : "inactive"}`
+        detail: `restore=${recovery.historyBack ? "background_history.back" : "content_guard"};stable=${recovery.stable};final=${recovery.finalUrl};from=${protectedJobsUrl};automation=${ownsActiveSession ? "paused" : "inactive"}`
       }, tabId);
     } finally {
       ownerRouteRecoveryTabIds.delete(tabId);
@@ -717,7 +622,6 @@ async function handleAutomationTabNavigation(tabId, url) {
 async function stabilizeProtectedJobsRoute(tabId, protectedJobsUrl = "") {
   let historyBack = false;
   let historyBackAttempted = false;
-  let jobsUrlFallback = false;
   let finalUrl = "";
   let consecutiveJobsChecks = 0;
   for (const checkpointMs of OWNER_ROUTE_RECOVERY_CHECKPOINTS_MS) {
@@ -743,7 +647,6 @@ async function stabilizeProtectedJobsRoute(tabId, protectedJobsUrl = "") {
   return {
     historyBack,
     historyBackAttempted,
-    jobsUrlFallback,
     finalUrl,
     stable: consecutiveJobsChecks >= 2 && isAutomationJobsUrl(finalUrl)
   };
@@ -851,14 +754,6 @@ function getTab(tabId) {
   }));
 }
 
-function removeTab(tabId) {
-  return new Promise((resolve, reject) => chrome.tabs.remove(tabId, () => {
-    const error = consumeRuntimeLastError();
-    if (error) reject(new Error(error.message));
-    else resolve();
-  }));
-}
-
 function setTabAutoDiscardable(tabId, autoDiscardable) {
   if (!Number.isInteger(tabId) || !chrome.tabs?.update) return Promise.resolve(false);
   return new Promise((resolve) => chrome.tabs.update(tabId, { autoDiscardable }, () => {
@@ -889,10 +784,10 @@ async function analyzeJob(payload) {
   });
   const retryPrompt = `${prompt}\n\n【输出纠正】上一次请求没有返回可见正文。请关闭推理展开，只输出一个完整 JSON 对象，不要输出解释或 Markdown。`;
   const retrySettings = { ...settings, analysisSpeed: "fast" };
-  const responses = [await callAi(settings, prompt, 0.3)];
+  const responses = [await callAi(settings, prompt)];
   let initialResponse = responses[0];
   if (!String(initialResponse.text || "").trim()) {
-    const retryResponse = await callAi(retrySettings, retryPrompt, 0.3);
+    const retryResponse = await callAi(retrySettings, retryPrompt);
     responses.push(retryResponse);
     initialResponse = retryResponse;
   }
@@ -907,7 +802,7 @@ async function analyzeJob(payload) {
     parsedResult = parseJsonWithDiagnostics(raw, validateAnalysisShape);
   } catch (firstError) {
     if (responses.length === 1 && initialResponse.textSource === "reasoning_content") {
-      const retryResponse = await callAi(retrySettings, retryPrompt, 0.3);
+      const retryResponse = await callAi(retrySettings, retryPrompt);
       responses.push(retryResponse);
       initialResponse = retryResponse;
       if (initialResponse.truncated) {
@@ -919,11 +814,11 @@ async function analyzeJob(payload) {
       try {
         parsedResult = parseJsonWithDiagnostics(raw, validateAnalysisShape);
       } catch (retryError) {
-        throw new Error(`AI 结构化输出不是合法 JSON，空正文自动重试后仍失败：${String(retryError?.message || retryError)}`);
+        throw new Error(`${analysisParseFailureLabel(retryError)}，空正文自动重试后仍失败：${String(retryError?.message || retryError)}`);
       }
     } else {
       const retryDetail = responses.length > 1 ? "，空正文自动重试后仍失败" : "且不会发起二次修复请求";
-      throw new Error(`AI 结构化输出不是合法 JSON，已停止本岗位分析${retryDetail}：${String(firstError?.message || firstError)}`);
+      throw new Error(`${analysisParseFailureLabel(firstError)}，已停止本岗位分析${retryDetail}：${String(firstError?.message || firstError)}`);
     }
   }
   const parsed = parsedResult.value;
@@ -949,10 +844,18 @@ async function analyzeJob(payload) {
         0
       ),
       usage,
-      analysisUsage: initialResponse.usage,
-      repairUsage: null
+      analysisUsage: initialResponse.usage
     }
   };
+}
+
+// JSON.parse raises SyntaxError; validateAnalysisShape raises TypeError. They
+// need different wording because they need different fixes — one is a broken
+// reply, the other is a reply whose fields don't match what we asked for.
+function analysisParseFailureLabel(error) {
+  return error instanceof TypeError
+    ? "AI 结构化输出字段不符合预期"
+    : "AI 结构化输出不是合法 JSON";
 }
 
 function getSettings() {
@@ -1120,7 +1023,7 @@ function aggregateTokenUsage(values) {
   }), emptyTokenUsage()));
 }
 
-async function callAi(settings, content, _temperature, options = {}) {
+async function callAi(settings, content, options = {}) {
   const protocol = normalizeApiProtocol(settings.apiProtocol);
   const requestedTokens = Number(options.maxOutputTokens);
   const maxOutputTokens = Number.isFinite(requestedTokens) && requestedTokens > 0
@@ -1625,7 +1528,10 @@ function buildAnalysisPrompt({
         ? "应届身份：非应届生"
         : "应届身份：未设置，请勿自行假定"
   ].join("；");
-  const passScore = Math.max(0, Math.min(100, Number(settings.minScore) || 60));
+  const configuredPassScore = Number(settings.minScore);
+  const passScore = Number.isFinite(configuredPassScore)
+    ? Math.max(0, Math.min(100, configuredPassScore))
+    : 60;
   const resumeForPrompt = compactAnalysisText(resumeText, MAX_RESUME_INPUT_CHARS);
   const jobDescriptionForPrompt = compactAnalysisText(job.jd, MAX_JOB_DESCRIPTION_INPUT_CHARS);
   const cityRule = settings.restrictTargetLocation && locationText
@@ -1683,8 +1589,8 @@ function buildAnalysisPrompt({
 - 与目标方向、简历主线和可迁移能力都基本无关的岗位，即使门槛低，也应低于 50 分，不得为了凑投递量给高分。
 - 信息不足应降低置信度和分数，不能自行补全事实。
 - ${passScore} 分是用户设置的达标线。score >= ${passScore} 且 excluded=false 时 decision=recommend；低于线但值得查看时 manual_review；明显无关或排除岗位用 skip。
-- reasons 最多 3 条，每条一句，合计说明方向、简历证据和岗位门槛。
-- risks 最多 2 条，每条一句；没有明确风险时返回空数组。
+- reasons 最多 ${MAX_ANALYSIS_REASONS} 条，每条一句，合计说明方向、简历证据和岗位门槛。
+- risks 最多 ${MAX_ANALYSIS_RISKS} 条，每条一句；没有明确风险时返回空数组。
 
 输出必须是 JSON，不要 Markdown，不要解释 JSON 外的内容。
 JSON 格式：
@@ -1736,10 +1642,6 @@ ${jobDescriptionForPrompt}
 `.trim();
 }
 
-function parseJson(text) {
-  return parseJsonWithDiagnostics(text).value;
-}
-
 function parseJsonWithDiagnostics(text, validator = null) {
   const source = String(text || "").trim();
   const withoutFence = source
@@ -1788,10 +1690,6 @@ function parseJsonWithDiagnostics(text, validator = null) {
     }
   }
   throw lastError || new SyntaxError("模型未返回 JSON 对象");
-}
-
-function extractFirstJsonObject(text) {
-  return extractJsonObjectCandidates(text)[0] || String(text || "").trim();
 }
 
 function extractJsonObjectCandidates(text) {
@@ -2008,39 +1906,46 @@ function normalizeAnalysis(data) {
     exclusion_reason: String(data?.exclusion_reason || ""),
     occupation_family: String(data?.occupation_family || ""),
     target_alignment: String(data?.target_alignment || "unclear"),
-    reasons: Array.isArray(data?.reasons) ? data.reasons : [],
-    risks: Array.isArray(data?.risks) ? data.risks : [],
-    resume_tips: Array.isArray(data?.resume_tips) ? data.resume_tips : [],
+    reasons: boundedStringList(data?.reasons, MAX_ANALYSIS_REASONS),
+    risks: boundedStringList(data?.risks, MAX_ANALYSIS_RISKS),
     location_fit: String(data?.location_fit || "unclear"),
-    greeting: String(data?.greeting || ""),
-    qa: Array.isArray(data?.qa) ? data.qa : []
+    greeting: String(data?.greeting || "")
   };
 }
 
+function boundedStringList(value, limit) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item) => typeof item === "string").slice(0, limit);
+}
+
+const ANALYSIS_ENUM_FIELDS = {
+  decision: ["recommend", "manual_review", "skip"],
+  target_alignment: ["direct", "transferable", "unrelated", "unclear"],
+  location_fit: ["good", "acceptable", "unclear", "poor"]
+};
+
+// This runs against every candidate object extractJsonObjectCandidates() pulls
+// out of the raw reply, so it has two jobs: reject fragments that are not an
+// analysis at all, and accept every reply that normalizeAnalysis can safely
+// finish. Only score+excluded are load-bearing enough to require — they are
+// also a strong enough signature that stray objects from the model's prose do
+// not pass. Everything else is optional here because normalizeAnalysis already
+// defaults it; requiring exclusion_match/exclusion_reason threw away otherwise
+// usable analyses whenever a job hit no exclusion rule.
 function validateAnalysisShape(data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new TypeError("AI 结构化输出必须是 JSON 对象");
   }
-  const requiredStrings = [
-    "decision", "exclusion_match", "exclusion_reason", "occupation_family",
-    "target_alignment", "location_fit", "greeting"
-  ];
   if (!Number.isFinite(Number(data.score))) throw new TypeError("AI 结构化输出缺少有效 score");
   if (typeof data.excluded !== "boolean") throw new TypeError("AI 结构化输出缺少布尔值 excluded");
-  if (!requiredStrings.every((key) => typeof data[key] === "string")) {
-    throw new TypeError("AI 结构化输出缺少必需文本字段");
-  }
-  if (!["recommend", "manual_review", "skip"].includes(data.decision)) {
-    throw new TypeError("AI 结构化输出的 decision 无效");
-  }
-  if (!["direct", "transferable", "unrelated", "unclear"].includes(data.target_alignment)) {
-    throw new TypeError("AI 结构化输出的 target_alignment 无效");
-  }
-  if (!["good", "acceptable", "unclear", "poor"].includes(data.location_fit)) {
-    throw new TypeError("AI 结构化输出的 location_fit 无效");
+  for (const [key, allowed] of Object.entries(ANALYSIS_ENUM_FIELDS)) {
+    if (data[key] !== undefined && !allowed.includes(data[key])) {
+      throw new TypeError(`AI 结构化输出的 ${key} 无效`);
+    }
   }
   for (const key of ["reasons", "risks"]) {
-    if (!Array.isArray(data[key]) || !data[key].every((item) => typeof item === "string")) {
+    if (data[key] !== undefined
+      && (!Array.isArray(data[key]) || !data[key].every((item) => typeof item === "string"))) {
       throw new TypeError(`AI 结构化输出的 ${key} 必须是字符串数组`);
     }
   }

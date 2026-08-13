@@ -15,7 +15,7 @@ assert.match(manualHandler,
   "the trusted automation event must reuse navigation containment without starting a second contact controller");
 
 const ownerStart = source.indexOf("async function communicateOnOwnerPage(job");
-const ownerEnd = source.indexOf("async function performIsolatedCommunication", ownerStart);
+const ownerEnd = source.indexOf("function communicationBlockStatus", ownerStart);
 const ownerContact = source.slice(ownerStart, ownerEnd);
 assert.match(ownerContact, /dispatchNativeContactClick\(job, button\)/,
   "owner-page communication must use the browser-native click executor");
@@ -23,7 +23,7 @@ assert.doesNotMatch(ownerContact, /node\.click\(\)|button\.click\(\)|clickOnOwne
   "the new contact path must never fall back to an untrusted DOM click");
 
 const dispatchStart = source.indexOf("async function dispatchNativeContactClick(job, button)");
-const dispatchEnd = source.indexOf("async function performIsolatedCommunication", dispatchStart);
+const dispatchEnd = source.indexOf("function communicationBlockStatus", dispatchStart);
 const dispatcher = source.slice(dispatchStart, dispatchEnd);
 assert.ok(dispatchStart >= 0 && dispatchEnd > dispatchStart, "the content-side click boundary must exist");
 assert.match(dispatcher, /elementFromPoint/,
@@ -36,7 +36,7 @@ assert.match(dispatcher, /nativeAutomationContactKeys\.add[\s\S]*finally[\s\S]*n
   "the automation ownership marker must be cleared on every outcome");
 
 const runtimeStart = source.indexOf("async function dispatchNativeContactClick(job, button)");
-const runtimeEnd = source.indexOf("async function performIsolatedCommunication", runtimeStart);
+const runtimeEnd = source.indexOf("function communicationBlockStatus", runtimeStart);
 const panel = {
   style: {
     values: new Map([["pointer-events", "auto"]]),

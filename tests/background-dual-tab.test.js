@@ -136,6 +136,8 @@ async function runNavigationScenario(contactInFlight, targetUrl = "https://www.z
   assert.match(saved.status, /暂停/);
   if (contactInFlight) {
     assert.equal(saved.contactInFlight, false);
+    assert.equal(saved.currentJobKey, "",
+      "clearing the in-flight marker must also release its paired job key");
     assert.equal(saved.progress[jobKey].status, "attention");
   }
   const discardUpdate = updatedTabs.filter((entry) => "autoDiscardable" in entry.changes).at(-1);

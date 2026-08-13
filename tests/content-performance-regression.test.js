@@ -68,8 +68,9 @@ assert.match(source, /function mutationAffectsJobList\(mutation\)/,
 
 const renderer = source.slice(
   source.indexOf("function renderList()"),
-  source.indexOf("async function retryFailedJob")
+  source.indexOf("function jobProgressInfo")
 );
+assert.ok(renderer.length > 0, "the renderer test boundary must resolve to live production code");
 assert.doesNotMatch(renderer, /list\.innerHTML\s*=\s*["']{2}/,
   "status updates must not destroy and rebuild the entire result list");
 assert.match(renderer, /installJobListEventDelegation/,

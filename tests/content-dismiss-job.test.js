@@ -14,6 +14,9 @@ assert.match(source, /dismissedJobKeys: Array\.from\(JC_STATE\.dismissedJobKeys\
 const start = source.indexOf("function dismissJob(key,");
 const end = source.indexOf("function mountSalaryVisualClone", start);
 assert.ok(start >= 0 && end > start, "job dismissal handler must exist");
+const clearStart = source.indexOf("function clearContactInFlight()");
+const clearEnd = source.indexOf("async function runQualifiedJobContact", clearStart);
+assert.ok(clearStart >= 0 && clearEnd > clearStart, "contact marker cleanup must exist");
 
 const pendingJob = { key: "job:pending", title: "待分析岗位", index: 0 };
 const analyzingJob = { key: "job:analyzing", title: "分析中岗位", index: 1 };
@@ -42,6 +45,7 @@ const sandbox = {
     pipeline: {
       active: true,
       allPaused: false,
+      contactInFlight: true,
       batchKeys: [pendingJob.key, analyzingJob.key]
     }
   },
@@ -70,7 +74,10 @@ const sandbox = {
   }
 };
 
-vm.runInNewContext(`${source.slice(start, end)}\nthis.dismissJob = dismissJob;`, sandbox);
+vm.runInNewContext(
+  `${source.slice(clearStart, clearEnd)}\n${source.slice(start, end)}\nthis.dismissJob = dismissJob;`,
+  sandbox
+);
 
 assert.equal(sandbox.dismissJob(pendingJob.key), true);
 assert.deepEqual(sandbox.JC_STATE.jobs.map((job) => job.key), [analyzingJob.key]);
@@ -89,9 +96,11 @@ assert.equal(sandbox.JC_STATE.analyses.has(analyzingJob.key), false);
 assert.equal(sandbox.JC_STATE.jobProgress.has(analyzingJob.key), false);
 assert.equal(sandbox.JC_STATE.selectedKey, "");
 assert.equal(sandbox.JC_STATE.currentJobKey, "");
+assert.equal(sandbox.JC_STATE.pipeline.contactInFlight, false,
+  "dismissing the marked job must clear both halves of the contact marker");
 assert.equal(workerStarts, 1, "the active pipeline should continue with the next eligible job");
 assert.equal(rendered, 2);
-assert.equal(persisted, 2);
+assert.equal(persisted, 3);
 assert.match(status, /已关闭检测/);
 
 const contactingJob = { key: "job:contacting", title: "人工沟通岗位", index: 0 };

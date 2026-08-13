@@ -55,7 +55,7 @@ const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/
     return { ok: true, text: async () => JSON.stringify(data) };
   };
 
-  vm.runInNewContext(source, {
+  const sandbox = {
     AbortController,
     chrome: { runtime, storage: { local } },
     console,
@@ -63,7 +63,8 @@ const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/
     setTimeout,
     clearTimeout,
     URL
-  });
+  };
+  vm.runInNewContext(source, sandbox);
 
   const response = await new Promise((resolve) => {
     listener({
@@ -105,6 +106,17 @@ const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/
   assert.match(requestedPrompt, /reasons[^\n]*最多 3 条/);
   assert.doesNotMatch(requestedPrompt, /"resume_tips"|"qa"/,
     "batch scoring must not ask every provider to generate unused fields");
+  const zeroThresholdPrompt = sandbox.buildAnalysisPrompt({
+    resumeText: "候选人简历",
+    job: { title: "测试岗位", company: "测试公司", jd: "岗位描述" },
+    settings: { ...settings, minScore: 0 },
+    customInstructions: "",
+    targetDirections: "",
+    excludedDirections: "",
+    currentLocation: ""
+  });
+  assert.match(zeroThresholdPrompt, /\n- 0 分是用户设置的达标线/,
+    "a valid zero threshold must not silently fall back to 60 in the AI prompt");
   console.log("balanced AI scoring prompt regression test passed");
 })().catch((error) => {
   console.error(error);

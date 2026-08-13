@@ -25,19 +25,20 @@ const activationTargets = source.slice(
 );
 assert.doesNotMatch(activationTargets, /a\[href\*=['\"]\/job_detail\//,
   "the owner tab must not use a job-detail link as a fallback activation target");
-const helperStart = source.indexOf("function clickWithinDisposableTab(node)");
-const helperEnd = source.indexOf("function isElementVisible(node)", helperStart);
-const helperSource = source.slice(helperStart, helperEnd);
-assert.ok(helperStart >= 0 && helperEnd > helperStart, "disposable-tab click helper must exist");
-assert.match(helperSource, /setAttribute\(["']target["'],\s*["']_self["']\)/,
-  "link navigation must be contained in the inactive worker tab");
-assert.match(helperSource, /setAttribute\(["']rel["'],\s*["']noopener noreferrer["']\)/,
-  "the worker click must not expose an opener");
-assert.equal((helperSource.match(/node\.click\(\)/g) || []).length, 1,
-  "the worker helper must issue exactly one native click");
+// safeClick is now the only helper that issues a DOM click, and it exists only
+// for BOSS's own dialog controls (the "留在此页" button) — never for the
+// communication button, which goes through the browser-native click path.
+const safeClickStart = source.indexOf("function safeClick(node)");
+const safeClickEnd = source.indexOf("function isElementVisible(node)", safeClickStart);
+const safeClickSource = source.slice(safeClickStart, safeClickEnd);
+assert.ok(safeClickStart >= 0 && safeClickEnd > safeClickStart, "dialog click helper must exist");
+assert.match(safeClickSource, /preventJavascriptUrlDefaultOnce\(node\)/,
+  "a javascript: control must not trigger its CSP-violating default action");
+assert.equal((safeClickSource.match(/node\.click\(\)/g) || []).length, 1,
+  "the dialog helper must issue exactly one native click");
 const originalContact = source.slice(
   source.indexOf("async function clickCommunicateForJob(job)"),
-  source.indexOf("async function performIsolatedCommunication", source.indexOf("async function clickCommunicateForJob(job)"))
+  source.indexOf("function communicationBlockStatus", source.indexOf("async function clickCommunicateForJob(job)"))
 );
 assert.match(originalContact, /findCommunicationButtonForJob\(job\)/,
   "the current job detail must provide the communication control");

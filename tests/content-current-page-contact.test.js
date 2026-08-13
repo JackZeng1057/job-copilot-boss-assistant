@@ -13,7 +13,7 @@ assert.doesNotMatch(finder, /===\s*["']立即沟通["']/,
   "button recognition must not require the exact immediate-contact label");
 
 const contactStart = source.indexOf("async function clickCommunicateForJob(job)");
-const contactEnd = source.indexOf("async function performIsolatedCommunication", contactStart);
+const contactEnd = source.indexOf("function communicationBlockStatus", contactStart);
 const contact = source.slice(contactStart, contactEnd);
 assert.ok(contactStart >= 0 && contactEnd > contactStart, "owner-tab contact coordinator must exist");
 assert.match(contact, /await selectJobDetail\(job\)/,
@@ -39,18 +39,14 @@ assert.doesNotMatch(contact, /communicateInHiddenFrame|communicateInIsolatedTab/
 assert.doesNotMatch(contact, /updateContactSession/,
   "the owner tab must not be marked as an in-flight navigation target");
 
-const workerStart = source.indexOf("async function performIsolatedCommunication");
-const workerEnd = source.indexOf("function communicationBlockStatus", workerStart);
-const worker = source.slice(workerStart, workerEnd);
-assert.ok(workerStart >= 0 && workerEnd > workerStart, "isolated communication worker must exist");
-assert.equal((worker.match(/clickWithinDisposableTab\(button\)/g) || []).length, 1,
-  "the disposable tab may click the immediate-contact button exactly once");
-assert.doesNotMatch(worker, /dispatchCommunicationRetryClick|clickAttempt/,
+// The isolated worker-tab path was retired in 1.0.0 and its implementation is
+// gone; the background still rejects stale callers by message type.
+assert.doesNotMatch(source, /function performIsolatedCommunication|function clickWithinDisposableTab/,
+  "the retired disposable-tab communication path must not come back");
+assert.equal((contact.match(/await dispatchNativeContactClick\(/g) || []).length, 1,
+  "the contact coordinator may dispatch the communication click exactly once");
+assert.doesNotMatch(contact, /dispatchCommunicationRetryClick|clickAttempt/,
   "a timeout must never trigger a second communication click");
-assert.match(worker, /\^\(继续沟通\|继续聊\|再次沟通\)\$[\s\S]*return ["']already_contacted["']/,
-  "a worker that discovers an existing conversation must also avoid clicking");
-assert.match(source, /function clickWithinDisposableTab[\s\S]*setAttribute\(["']target["'],\s*["']_self["']\)/,
-  "a link-style communication control must be contained in the inactive worker tab");
 assert.match(source, /stayed_confirmed/,
   "a success dialog followed by staying on the jobs page must be a first-class confirmed outcome");
 
