@@ -4,7 +4,9 @@ const vm = require("node:vm");
 
 // Regression guard for the cross-context ordering contract: the service worker
 // must confirm the job marker is stored before the native click can navigate.
-const source = fs.readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8");
+const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
+  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
+  .join("\n");
 
 function lift(signature) {
   const start = source.indexOf(signature);

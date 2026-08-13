@@ -1,7 +1,9 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 
-const script = fs.readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8");
+const script = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
+  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
+  .join("\n");
 const styles = fs.readFileSync(new URL("../content.css", `file://${__dirname}/`), "utf8");
 
 for (const direction of ["n", "e", "s", "w", "nw", "ne", "sw", "se"]) {

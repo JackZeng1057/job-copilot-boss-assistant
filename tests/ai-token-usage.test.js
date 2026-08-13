@@ -3,7 +3,9 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 const backgroundSource = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
-const contentSource = fs.readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8");
+const contentSource = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
+  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
+  .join("\n");
 
 const start = backgroundSource.indexOf("function emptyTokenUsage");
 const end = backgroundSource.indexOf("async function callAi", start);

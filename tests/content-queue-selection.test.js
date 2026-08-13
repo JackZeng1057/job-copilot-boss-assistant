@@ -5,7 +5,9 @@ const vm = require("node:vm");
 // Behavioural test for the queue's job-selection rules. content.js boots a
 // panel at load time and needs a DOM, so instead of loading the whole file we
 // lift the pure queue functions into a sandbox and actually call them.
-const source = fs.readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8");
+const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
+  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
+  .join("\n");
 
 function lift(signature) {
   const start = source.indexOf(signature);
@@ -31,6 +33,8 @@ const lifted = [
   "function jobNeedsProcessing(job)",
   "function takeNextJobForProcessing()",
   "function rememberCompletedJobKey(key)",
+  "function rememberDismissedJobKey(key)",
+  "function rememberBoundedJobKey(keys, key)",
   "function prepareCurrentBatch()"
 ].map(lift).join("\n\n");
 
@@ -52,7 +56,7 @@ function makeSandbox({ jobs, analyses = {}, progress = {}, completed = [], batch
     }
   };
   vm.runInNewContext(
-    `${lifted}\nthis.__q = { jobNeedsProcessing, takeNextJobForProcessing, prepareCurrentBatch, isQualifiedJob };`,
+    `${lifted}\nthis.__q = { jobNeedsProcessing, takeNextJobForProcessing, prepareCurrentBatch, isQualifiedJob, rememberCompletedJobKey, rememberDismissedJobKey };`,
     sandbox
   );
   return sandbox;
@@ -154,6 +158,26 @@ for (const status of ["contacted", "unavailable", "detail_mismatch", "attention"
   const batch = s.__q.prepareCurrentBatch();
   assert.equal(batch.length, 15, "a batch must not exceed JOB_BATCH_SIZE");
   assert.ok(!batch.includes("j0"), "a detached job must not enter the batch");
+}
+
+// --- both key sets stay bounded, or the in-memory set drifts from the one the
+// session persists and applyJobSnapshot pays an O(n) copy on every page sync ---
+{
+  const s = makeSandbox({ jobs: [job("a")] });
+  s.JC_STATE.dismissedJobKeys = new Set();
+  for (let i = 0; i < 700; i += 1) {
+    s.__q.rememberCompletedJobKey(`c${i}`);
+    s.__q.rememberDismissedJobKey(`d${i}`);
+  }
+  assert.equal(s.JC_STATE.completedJobKeys.size, 500, "completed keys must stay capped");
+  assert.equal(s.JC_STATE.dismissedJobKeys.size, 500, "dismissed keys must stay capped too");
+  assert.ok(!s.JC_STATE.dismissedJobKeys.has("d0"), "the oldest dismissed key must be evicted");
+  assert.ok(s.JC_STATE.dismissedJobKeys.has("d699"), "the newest dismissed key must be kept");
+
+  // Re-recording moves a key to the newest slot rather than duplicating it.
+  s.__q.rememberDismissedJobKey("d250");
+  assert.equal(s.JC_STATE.dismissedJobKeys.size, 500, "re-recording must not grow the set");
+  assert.equal([...s.JC_STATE.dismissedJobKeys].at(-1), "d250", "a re-recorded key becomes newest");
 }
 
 console.log("Queue selection tests passed");

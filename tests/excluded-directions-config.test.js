@@ -4,7 +4,9 @@ const fs = require("node:fs");
 const popupHtml = fs.readFileSync(new URL("../popup.html", `file://${__dirname}/`), "utf8");
 const popupJs = fs.readFileSync(new URL("../popup.js", `file://${__dirname}/`), "utf8");
 const background = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
-const content = fs.readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8");
+const content = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
+  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
+  .join("\n");
 
 assert.match(popupHtml, /id="excludedDirections"/);
 assert.match(popupHtml, /默认留空，不会把任何人的个人排除项应用给其他用户/);

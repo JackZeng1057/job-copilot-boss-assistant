@@ -2,7 +2,9 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8");
+const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
+  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
+  .join("\n");
 assert.match(source, /class="jc-dismiss-job"[\s\S]*data-dismiss-key=[\s\S]*aria-label="关闭检测：/,
   "each job row must render an accessible dismissal control");
 assert.match(source, /closest\("[^"\n]*\[data-dismiss-key\][^"\n]*"\)/,
@@ -54,6 +56,9 @@ const sandbox = {
   },
   rememberCompletedJobKey(key) {
     sandbox.JC_STATE.completedJobKeys.add(key);
+  },
+  rememberDismissedJobKey(key) {
+    sandbox.JC_STATE.dismissedJobKeys.add(key);
   },
   clearHighlights() {},
   renderList() {

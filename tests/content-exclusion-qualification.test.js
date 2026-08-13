@@ -2,7 +2,9 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8");
+const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
+  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
+  .join("\n");
 const start = source.indexOf("function isQualifiedJob(job)");
 const end = source.indexOf("function jobNeedsProcessing(job)", start);
 assert.ok(start >= 0 && end > start, "qualified-job guard must exist");
