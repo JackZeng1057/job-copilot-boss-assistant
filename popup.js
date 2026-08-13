@@ -1,3 +1,5 @@
+// Settings runtime: validates provider options, stores preferences, and imports
+// text or PDF resumes for later job analysis.
 import * as pdfjsLib from "./vendor/pdfjs/pdf.min.mjs";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("./vendor/pdfjs/pdf.worker.min.mjs", import.meta.url).toString();
