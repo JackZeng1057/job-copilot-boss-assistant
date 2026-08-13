@@ -58,8 +58,9 @@ jobs:
           # tests, docs, marketing assets, previous archives — stays out of the
           # package users install.
           mkdir -p dist/extension
-          cp manifest.json background.js content.js content.css \
-             popup.html popup.js page-navigation-guard.js LICENSE dist/extension/
+          cp manifest.json background.js content.js content-job-scan.js \
+             content-panel-layout.js content.css popup.html popup.js \
+             page-navigation-guard.js LICENSE dist/extension/
           cp -R vendor dist/extension/
           # Icons are still pending; copy them once the directory lands.
           if [ -d icons ]; then cp -R icons dist/extension/; fi
