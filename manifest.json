@@ -27,16 +27,28 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.zhipin.com/*"],
-      "js": ["page-navigation-guard.js"],
+      "matches": [
+        "https://www.zhipin.com/*"
+      ],
+      "js": [
+        "page-navigation-guard.js"
+      ],
       "run_at": "document_start",
       "all_frames": true,
       "world": "MAIN"
     },
     {
-      "matches": ["https://www.zhipin.com/*"],
-      "js": ["content.js"],
-      "css": ["content.css"],
+      "matches": [
+        "https://www.zhipin.com/*"
+      ],
+      "js": [
+        "content-job-scan.js",
+        "content-panel-layout.js",
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
       "run_at": "document_idle"
     }
   ]

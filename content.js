@@ -56,8 +56,6 @@ const JC_STATE = {
   analysisRunId: 0
 };
 
-const PANEL_GEOMETRY_KEY = "jobCopilotPanelGeometryV2";
-const LAUNCHER_TOP_KEY = "jobCopilotLauncherTop";
 const PAGE_SYNC_DEBOUNCE_MS = 450;
 const PAGE_SNAPSHOT_POLL_MS = 5000;
 const JOB_SNAPSHOT_STABILITY_ATTEMPTS = 2;
@@ -72,18 +70,10 @@ const JOB_BATCH_SIZE = 15;
 const BETWEEN_BATCHES_DELAY_MS = 60000;
 const MAX_DETACHED_JOBS = 50;
 const MAX_COMPLETED_JOB_KEYS = 500;
-const JOB_CARD_SELECTORS = [
-  ".job-card-wrapper", ".job-list-box li", "li[class*='job-card']", "div[class*='job-card']"
-];
-const JOB_CARD_SELECTOR = JOB_CARD_SELECTORS.join(",");
 const CONTACT_STATUS_SELECTOR = [
   "[role='dialog']", "[role='status']", "[aria-live]", ".dialog", ".modal", ".boss-dialog",
   "[class*='dialog']", "[class*='modal']", "[class*='toast']", "[class*='message']"
 ].join(",");
-const KNOWN_JOB_CITIES = [
-  "北京", "上海", "广州", "深圳", "杭州", "南京", "苏州", "成都", "重庆", "武汉", "西安", "天津",
-  "长沙", "郑州", "青岛", "厦门", "合肥", "佛山", "东莞", "宁波", "无锡", "珠海", "福州"
-];
 const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "1.0.0";
 const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-manual-contact-v6`;
 // The service worker reads settings fresh on every analysis, so the page must
@@ -109,7 +99,6 @@ let manualChatOpenAt = 0;
 const manualContactInFlightKeys = new Set();
 const nativeAutomationContactKeys = new Set();
 const trustedManualContactEvents = new WeakSet();
-const frameworkSalaryCache = new WeakMap();
 
 const SHOULD_BOOT_CONTENT_RUNTIME = !hasLiveContentRuntime();
 if (SHOULD_BOOT_CONTENT_RUNTIME) {
@@ -867,301 +856,11 @@ function closePanel(panel, launcher) {
   restoreLauncherTop(launcher);
 }
 
-function placePanelDefault(panel) {
-  const width = Math.min(380, Math.max(300, window.innerWidth - 32));
-  const height = Math.min(560, Math.max(300, window.innerHeight - 112));
-  panel.style.width = `${width}px`;
-  panel.style.height = `${height}px`;
-  panel.style.maxHeight = "none";
-  panel.style.left = `${clamp(window.innerWidth - width - 18, 8, window.innerWidth - width - 8)}px`;
-  panel.style.top = `${clamp(88, 8, window.innerHeight - height - 8)}px`;
-  panel.style.right = "auto";
-  panel.style.bottom = "auto";
-}
-
-function restorePanelGeometry(panel) {
-  try {
-    const saved = JSON.parse(localStorage.getItem(PANEL_GEOMETRY_KEY) || "{}");
-    if (!saved || typeof saved !== "object") return false;
-    const minWidth = 260;
-    const minHeight = 180;
-    const maxWidth = Math.min(680, window.innerWidth - 24);
-    const maxHeight = Math.min(860, window.innerHeight - 24);
-    if (Number.isFinite(saved.width)) panel.style.width = `${clamp(saved.width, minWidth, maxWidth)}px`;
-    if (Number.isFinite(saved.height)) {
-      panel.style.height = `${clamp(saved.height, minHeight, maxHeight)}px`;
-      panel.style.maxHeight = "none";
-    }
-    if (Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
-      const width = panel.getBoundingClientRect().width || saved.width || 330;
-      const height = panel.getBoundingClientRect().height || saved.height || 360;
-      panel.style.left = `${clamp(saved.left, 8, window.innerWidth - width - 8)}px`;
-      panel.style.top = `${clamp(saved.top, 8, window.innerHeight - height - 8)}px`;
-      panel.style.right = "auto";
-      panel.style.bottom = "auto";
-    }
-    ensurePanelInViewport(panel);
-    return true;
-  } catch {
-    localStorage.removeItem(PANEL_GEOMETRY_KEY);
-    return false;
-  }
-}
-
-function ensurePanelInViewport(panel) {
-  const rect = panel.getBoundingClientRect();
-  const width = rect.width || 330;
-  const height = rect.height || 360;
-  panel.style.left = `${clamp(rect.left || window.innerWidth - width - 18, 8, Math.max(8, window.innerWidth - width - 8))}px`;
-  panel.style.top = `${clamp(rect.top || 88, 8, Math.max(8, window.innerHeight - height - 8))}px`;
-  panel.style.right = "auto";
-  panel.style.bottom = "auto";
-}
-
-function restoreLauncherTop(launcher) {
-  const savedTop = Number(localStorage.getItem(LAUNCHER_TOP_KEY));
-  const fallbackTop = Math.round(window.innerHeight * 0.58);
-  setLauncherTop(launcher, Number.isFinite(savedTop) ? savedTop : fallbackTop);
-}
-
-function setLauncherTop(launcher, top) {
-  const launcherHeight = launcher.offsetHeight || 72;
-  launcher.style.top = `${clamp(top, 86, Math.max(86, window.innerHeight - launcherHeight - 22))}px`;
-  launcher.style.right = "0";
-  launcher.style.bottom = "auto";
-}
-
-function enableLauncherDock(launcher) {
-  let startY = 0;
-  let startTop = 0;
-  let moved = false;
-  launcher.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
-    startY = event.clientY;
-    startTop = launcher.getBoundingClientRect().top;
-    moved = false;
-    launcher.setPointerCapture?.(event.pointerId);
-
-    const onMove = (moveEvent) => {
-      const nextTop = startTop + moveEvent.clientY - startY;
-      if (Math.abs(moveEvent.clientY - startY) > 4) moved = true;
-      if (moved) {
-        moveEvent.preventDefault();
-        launcher.classList.add("jc-launcher-dragging");
-        setLauncherTop(launcher, nextTop);
-      }
-    };
-    const onUp = () => {
-      launcher.classList.remove("jc-launcher-dragging");
-      localStorage.setItem(LAUNCHER_TOP_KEY, String(Math.round(launcher.getBoundingClientRect().top)));
-      if (moved) {
-        launcher.dataset.skipClick = "1";
-        setTimeout(() => {
-          launcher.dataset.skipClick = "0";
-        }, 0);
-      }
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  });
-}
-
-function enablePanelDrag(panel) {
-  const header = panel.querySelector(".jc-header");
-  if (!header) return;
-  header.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0 || event.target.closest("button")) return;
-    event.preventDefault();
-    const rect = panel.getBoundingClientRect();
-    const offsetX = event.clientX - rect.left;
-    const offsetY = event.clientY - rect.top;
-    panel.classList.add("jc-dragging");
-    panel.style.left = `${rect.left}px`;
-    panel.style.top = `${rect.top}px`;
-    panel.style.right = "auto";
-    panel.style.bottom = "auto";
-
-    const onMove = (moveEvent) => {
-      const current = panel.getBoundingClientRect();
-      panel.style.left = `${clamp(moveEvent.clientX - offsetX, 8, window.innerWidth - current.width - 8)}px`;
-      panel.style.top = `${clamp(moveEvent.clientY - offsetY, 8, window.innerHeight - current.height - 8)}px`;
-    };
-    const onUp = () => {
-      panel.classList.remove("jc-dragging");
-      savePanelGeometry(panel);
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  });
-}
-
-function enablePanelResize(panel) {
-  const handles = Array.from(panel.querySelectorAll("[data-jc-resize]"));
-  if (!handles.length) return;
-  handles.forEach((handle) => handle.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const direction = handle.dataset.jcResize || "se";
-    const rect = panel.getBoundingClientRect();
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const startWidth = rect.width;
-    const startHeight = rect.height;
-    const startRight = rect.right;
-    const startBottom = rect.bottom;
-    panel.classList.add("jc-resizing");
-    panel.style.left = `${rect.left}px`;
-    panel.style.top = `${rect.top}px`;
-    panel.style.right = "auto";
-    panel.style.bottom = "auto";
-    panel.style.maxHeight = "none";
-    handle.setPointerCapture?.(event.pointerId);
-
-    const onMove = (moveEvent) => {
-      const deltaX = moveEvent.clientX - startX;
-      const deltaY = moveEvent.clientY - startY;
-      let nextLeft = rect.left;
-      let nextTop = rect.top;
-      let nextWidth = startWidth;
-      let nextHeight = startHeight;
-
-      if (direction.includes("e")) {
-        nextWidth = clamp(startWidth + deltaX, 260, Math.min(680, window.innerWidth - rect.left - 8));
-      }
-      if (direction.includes("s")) {
-        nextHeight = clamp(startHeight + deltaY, 180, Math.min(860, window.innerHeight - rect.top - 8));
-      }
-      if (direction.includes("w")) {
-        nextWidth = clamp(startWidth - deltaX, 260, Math.min(680, startRight - 8));
-        nextLeft = startRight - nextWidth;
-      }
-      if (direction.includes("n")) {
-        nextHeight = clamp(startHeight - deltaY, 180, Math.min(860, startBottom - 8));
-        nextTop = startBottom - nextHeight;
-      }
-
-      panel.style.left = `${nextLeft}px`;
-      panel.style.top = `${nextTop}px`;
-      panel.style.width = `${nextWidth}px`;
-      panel.style.height = `${nextHeight}px`;
-    };
-    let finished = false;
-    const finishResize = () => {
-      if (finished) return;
-      finished = true;
-      panel.classList.remove("jc-resizing");
-      savePanelGeometry(panel);
-      if (handle.hasPointerCapture?.(event.pointerId)) {
-        handle.releasePointerCapture?.(event.pointerId);
-      }
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", finishResize);
-      window.removeEventListener("pointercancel", finishResize);
-      handle.removeEventListener("lostpointercapture", finishResize);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", finishResize);
-    window.addEventListener("pointercancel", finishResize);
-    handle.addEventListener("lostpointercapture", finishResize);
-  }));
-}
-
-function savePanelGeometry(panel) {
-  const rect = panel.getBoundingClientRect();
-  localStorage.setItem(PANEL_GEOMETRY_KEY, JSON.stringify({
-    left: Math.round(rect.left),
-    top: Math.round(rect.top),
-    width: Math.round(rect.width),
-    height: Math.round(rect.height)
-  }));
-}
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(Number(value), min), max);
-}
-
 function buildCustomInstructions() {
   return [
     JC_STATE.settings.customInstructions ? `评分偏好：${JC_STATE.settings.customInstructions}` : "",
     JC_STATE.settings.greetingStyle ? `话术风格：${JC_STATE.settings.greetingStyle}` : ""
   ].filter(Boolean).join("\n");
-}
-
-function extractJobCity(text) {
-  return KNOWN_JOB_CITIES.find((locationName) => String(text || "").includes(locationName)) || "";
-}
-
-function isLocationMetadata(text) {
-  const value = cleanText(text);
-  if (!value) return false;
-  const hasKnownCity = KNOWN_JOB_CITIES.some((city) => value.includes(city));
-  const looksLikeAddress = /(?:省|市|区|县|镇|街道|园区)(?:[·・\s]|$)/.test(value)
-    || /^[\u4e00-\u9fa5]{2,12}(?:·[\u4e00-\u9fa5]{2,12}){1,3}$/.test(value);
-  const hasRequirementSignal = /经验|学历|本科|大专|应届|不限|在校|实习|全职|兼职|技能|职责|要求/.test(value);
-  return (hasKnownCity || looksLikeAddress) && !hasRequirementSignal;
-}
-
-function captureJobSnapshot() {
-  const jobs = findCards().map((card, index) => {
-    // innerText forces style/layout for every card. textContent is sufficient
-    // for extraction and keeps repeated list snapshots off the rendering path.
-    const text = cleanText(card.textContent || "");
-    const salaryInfo = extractSalaryInfo(card, text);
-    const jobName = extractJobName(card, text);
-    const title = buildDisplayTitle(jobName, salaryInfo.text, text);
-    const job = {
-      index,
-      card,
-      text,
-      title,
-      jobName,
-      company: extractCompany(card, text),
-      city: extractJobCity(text),
-      salary: salaryInfo.text,
-      salaryFontFamily: salaryInfo.fontFamily,
-      salaryVisualHtml: salaryInfo.visualHtml,
-      salaryNode: salaryInfo.node,
-      requirements: extractRequirements(text),
-      url: extractUrl(card)
-    };
-    job.key = stableJobKey(job);
-    return job;
-  }).filter((job) => job.text.length > 10);
-  return {
-    jobs,
-    fingerprint: fingerprintJobs(jobs),
-    url: location.href.split("#")[0]
-  };
-}
-
-function stableJobKey(job) {
-  const idMatch = String(job.url || "").match(/\/job_detail\/([^/?#]+)/i);
-  if (idMatch?.[1]) return `job:${idMatch[1]}`;
-  const signature = [
-    cleanText(job.jobName).toLowerCase(),
-    cleanText(job.company).toLowerCase(),
-    cleanText(job.city),
-    cleanText(job.requirements).toLowerCase()
-  ].join("|");
-  return `card:${hashText(signature)}`;
-}
-
-function fingerprintJobs(jobs) {
-  return hashText(jobs.map((job) => job.key).join("|"));
-}
-
-function hashText(text) {
-  let hash = 2166136261;
-  for (const char of String(text || "")) {
-    hash ^= char.charCodeAt(0);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(36);
 }
 
 function progressFor(job) {
@@ -1223,7 +922,7 @@ async function analyzeJobs(options = {}) {
   // One loop owns both steps: analyze a job, then immediately communicate if it
   // passes. There is no second queue, timer, or delayed hand-off.
   while (true) {
-    if (JC_STATE.analysisRunId !== runId || JC_STATE.page.generation !== pageGeneration) {
+    if (isRunSuperseded(runId, pageGeneration)) {
       return { completed: false, reason: "superseded", analyzed: analyzedCount };
     }
     if (JC_STATE.pipeline.allPaused) {
@@ -1248,19 +947,8 @@ async function analyzeJobs(options = {}) {
     const existingAnalysis = JC_STATE.analyses.get(job.key);
     if (existingAnalysis) {
       const contactResult = await contactQualifiedJob(job, { runId, pageGeneration });
-      if (contactResult === "superseded") {
-        return { completed: false, reason: "superseded", analyzed: analyzedCount };
-      }
-      if (contactResult === "paused") {
-        JC_STATE.analyzing = false;
-        updateAutomationControls();
-        return { completed: false, reason: "paused", analyzed: analyzedCount };
-      }
-      if (contactResult === "halted") {
-        JC_STATE.analyzing = false;
-        updateAutomationControls();
-        return { completed: false, reason: "contact_halted", analyzed: analyzedCount };
-      }
+      const halted = contactOutcomeToRunResult(contactResult, analyzedCount);
+      if (halted) return halted;
       await sleep(BETWEEN_JOBS_DELAY_MS);
       continue;
     }
@@ -1269,7 +957,7 @@ async function analyzeJobs(options = {}) {
     setStatus(`正在定位并读取完整岗位详情：${job.title}`);
     renderList();
     const jobDescription = await collectJobDescriptionForAnalysis(job);
-    if (JC_STATE.analysisRunId !== runId || JC_STATE.page.generation !== pageGeneration) {
+    if (isRunSuperseded(runId, pageGeneration)) {
       return { completed: false, reason: "superseded", analyzed: analyzedCount };
     }
     if (JC_STATE.pipeline.ownerRouteEscaped) {
@@ -1287,24 +975,10 @@ async function analyzeJobs(options = {}) {
       return { completed: false, reason: "paused", analyzed: analyzedCount };
     }
     setStatus(`AI 分析中：${job.title}${jobDescription.complete ? "（完整 JD）" : "（卡片信息）"}`);
-    const payload = {
-      platform: "boss",
-      title: job.title,
-      company: job.company,
-      city: job.city || "",
-      salary: salaryForAi(job.salary),
-      jd: jobDescription.text,
-      jdComplete: jobDescription.complete,
-      url: job.url,
-      resumeProfile: JC_STATE.settings.profile,
-      currentLocation: JC_STATE.settings.currentLocation,
-      targetDirections: JC_STATE.settings.targetDirections,
-      excludedDirections: JC_STATE.settings.excludedDirections,
-      customInstructions: buildCustomInstructions()
-    };
+    const payload = buildAnalysisPayload(job, jobDescription);
     JC_STATE.analysisPayloads.set(job.key, payload);
     const response = await requestAiAnalysis(job, payload);
-    if (JC_STATE.analysisRunId !== runId || JC_STATE.page.generation !== pageGeneration) {
+    if (isRunSuperseded(runId, pageGeneration)) {
       return { completed: false, reason: "superseded", analyzed: analyzedCount };
     }
     if (response?.ok) {
@@ -1316,19 +990,8 @@ async function analyzeJobs(options = {}) {
         renderList();
         if (JC_STATE.pipeline.mode === "auto") {
           const contactResult = await contactQualifiedJob(job, { runId, pageGeneration });
-          if (contactResult === "superseded") {
-            return { completed: false, reason: "superseded", analyzed: analyzedCount };
-          }
-          if (contactResult === "paused") {
-            JC_STATE.analyzing = false;
-            updateAutomationControls();
-            return { completed: false, reason: "paused", analyzed: analyzedCount };
-          }
-          if (contactResult === "halted") {
-            JC_STATE.analyzing = false;
-            updateAutomationControls();
-            return { completed: false, reason: "contact_halted", analyzed: analyzedCount };
-          }
+          const halted = contactOutcomeToRunResult(contactResult, analyzedCount);
+          if (halted) return halted;
         }
       } else {
         setJobProgress(job, "not_qualified");
@@ -1336,30 +999,8 @@ async function analyzeJobs(options = {}) {
         setStatus(`岗位未达标，${Math.round(BETWEEN_JOBS_DELAY_MS / 1000)} 秒后处理下一个：${job.title}`);
       }
     } else {
-      const error = response?.error || "分析失败";
-      if (isExtensionContextError(error)) {
-        stopForInvalidatedExtensionContext(job);
-        return { completed: false, reason: "extension_context_invalidated", analyzed: analyzedCount };
-      }
-      JC_STATE.analyses.set(job.key, {
-        score: "--",
-        decision: "network_error",
-        greeting: "",
-        reasons: [friendlyAiError(error)],
-        rawError: error
-      });
-      setJobProgress(job, "error", friendlyAiError(error));
-      if (isTransientAiError(error)) {
-        JC_STATE.analyses.delete(job.key);
-        JC_STATE.analyzing = false;
-        JC_STATE.pipeline.allPaused = true;
-        JC_STATE.pipeline.phase = "paused";
-        updateAutomationControls();
-        renderList();
-        setStatus(`AI 网络暂时不可用，当前处理已暂停。\n${friendlyAiError(error)}`);
-        return { completed: false, reason: "network_error", analyzed: analyzedCount };
-      }
-      completeJob(job);
+      const halted = recordFailedAnalysis(job, response, analyzedCount);
+      if (halted) return halted;
     }
     renderList();
     await sleep(BETWEEN_JOBS_DELAY_MS);
@@ -1437,6 +1078,80 @@ function takeNextJobForProcessing() {
   if (job.key === JC_STATE.retryJobKey) JC_STATE.retryJobKey = "";
   if (job.key === JC_STATE.retryContactJobKey) JC_STATE.retryContactJobKey = "";
   return job;
+}
+
+// A page swap or a newer run invalidates everything the current run is holding,
+// so its result must be discarded rather than written back over fresher state.
+function isRunSuperseded(runId, pageGeneration) {
+  return JC_STATE.analysisRunId !== runId || JC_STATE.page.generation !== pageGeneration;
+}
+
+// Translates a contact outcome into the result analyzeJobs returns, or null
+// when the run should carry on to the next job.
+function contactOutcomeToRunResult(contactResult, analyzedCount) {
+  if (contactResult === "superseded") {
+    return { completed: false, reason: "superseded", analyzed: analyzedCount };
+  }
+  if (contactResult === "paused" || contactResult === "halted") {
+    JC_STATE.analyzing = false;
+    updateAutomationControls();
+    return {
+      completed: false,
+      reason: contactResult === "paused" ? "paused" : "contact_halted",
+      analyzed: analyzedCount
+    };
+  }
+  return null;
+}
+
+function buildAnalysisPayload(job, jobDescription) {
+  return {
+    platform: "boss",
+    title: job.title,
+    company: job.company,
+    city: job.city || "",
+    salary: salaryForAi(job.salary),
+    jd: jobDescription.text,
+    jdComplete: jobDescription.complete,
+    url: job.url,
+    resumeProfile: JC_STATE.settings.profile,
+    currentLocation: JC_STATE.settings.currentLocation,
+    targetDirections: JC_STATE.settings.targetDirections,
+    excludedDirections: JC_STATE.settings.excludedDirections,
+    customInstructions: buildCustomInstructions()
+  };
+}
+
+// Records the failure on the job row, and returns a run result only when the
+// failure has to stop the whole run instead of just this job.
+function recordFailedAnalysis(job, response, analyzedCount) {
+  const error = response?.error || "分析失败";
+  if (isExtensionContextError(error)) {
+    stopForInvalidatedExtensionContext(job);
+    return { completed: false, reason: "extension_context_invalidated", analyzed: analyzedCount };
+  }
+  JC_STATE.analyses.set(job.key, {
+    score: "--",
+    decision: "network_error",
+    greeting: "",
+    reasons: [friendlyAiError(error)],
+    rawError: error
+  });
+  setJobProgress(job, "error", friendlyAiError(error));
+  // A transient network fault must not burn the job: drop the placeholder so it
+  // stays pending, and pause so the user can resume from the same job.
+  if (isTransientAiError(error)) {
+    JC_STATE.analyses.delete(job.key);
+    JC_STATE.analyzing = false;
+    JC_STATE.pipeline.allPaused = true;
+    JC_STATE.pipeline.phase = "paused";
+    updateAutomationControls();
+    renderList();
+    setStatus(`AI 网络暂时不可用，当前处理已暂停。\n${friendlyAiError(error)}`);
+    return { completed: false, reason: "network_error", analyzed: analyzedCount };
+  }
+  completeJob(job);
+  return null;
 }
 
 function ensureAnalysisWorker() {
@@ -1683,12 +1398,22 @@ function completeJob(job) {
 }
 
 function rememberCompletedJobKey(key) {
+  rememberBoundedJobKey(JC_STATE.completedJobKeys, key);
+}
+
+function rememberDismissedJobKey(key) {
+  rememberBoundedJobKey(JC_STATE.dismissedJobKeys, key);
+}
+
+// Both key sets are capped at the same size the session payload is trimmed to.
+// Without the cap the in-memory set and the persisted one drift apart, and
+// applyJobSnapshot pays an O(n) copy of the set on every page sync.
+function rememberBoundedJobKey(keys, key) {
   if (!key) return;
-  JC_STATE.completedJobKeys.delete(key);
-  JC_STATE.completedJobKeys.add(key);
-  while (JC_STATE.completedJobKeys.size > MAX_COMPLETED_JOB_KEYS) {
-    const oldestKey = JC_STATE.completedJobKeys.values().next().value;
-    JC_STATE.completedJobKeys.delete(oldestKey);
+  keys.delete(key);
+  keys.add(key);
+  while (keys.size > MAX_COMPLETED_JOB_KEYS) {
+    keys.delete(keys.values().next().value);
   }
 }
 
@@ -2275,7 +2000,7 @@ function dismissJob(key, options = {}) {
     || progress.status === "qualified"
     || (progress.status === "contacting" && !manuallyContacted)
     || JC_STATE.currentJobKey === key;
-  JC_STATE.dismissedJobKeys.add(key);
+  rememberDismissedJobKey(key);
   rememberCompletedJobKey(key);
   JC_STATE.jobs = JC_STATE.jobs
     .filter((item) => item.key !== key)
@@ -3102,14 +2827,6 @@ function stayOnPageDialogConfirmsSend(button) {
     .test(cleanText(dialog.textContent || dialog.innerText || ""));
 }
 
-function findCards() {
-  for (const selector of JOB_CARD_SELECTORS) {
-    const cards = Array.from(document.querySelectorAll(selector));
-    if (cards.length > 0) return cards;
-  }
-  return [];
-}
-
 function findCommunicationButtons(root) {
   const items = Array.from(root.querySelectorAll("a,button"));
   return items.filter((item) => !isInsideJobCopilot(item)
@@ -3120,170 +2837,6 @@ function findCommunicationButtons(root) {
 function findCommunicationButtonForJob(job) {
   return findCommunicationButtons(document)
     .find((button) => communicationButtonMatchesJob(button, job)) || null;
-}
-
-function extractJobName(card, text) {
-  // querySelector with a comma returns DOM order, not selector priority. A
-  // broad job-title container may wrap both name and salary, so select the
-  // narrow name node first.
-  const selectors = [".job-name", "[class*='job-name']", ".job-title", "[class*='job-title']"];
-  const node = selectors.map((selector) => card.querySelector(selector)).find(Boolean);
-  const raw = cleanText(node?.textContent || "") || firstUsefulLine(card, text);
-  return cleanTitleBase(raw).slice(0, 42) || "未知岗位";
-}
-
-function buildDisplayTitle(jobName, salary, cardText) {
-  const displaySalary = normalizeDisplaySalary(salary) || normalizeDisplaySalary(findSalaryLine(cardText));
-  return [jobName, displaySalary].filter(Boolean).join(" ").slice(0, 72);
-}
-
-function extractCompany(card, text) {
-  const node = card.querySelector(".company-name, [class*='company']");
-  return cleanText(node?.textContent || "").slice(0, 40) || "";
-}
-
-function extractSalaryInfo(card, text) {
-  const node = findSalaryNode(card);
-  const raw = cleanText(node?.textContent || node?.innerText || "");
-  const sourceText = raw || text;
-  const readable = findReadableSalaryMetadata(node)
-    || normalizeDisplaySalary(sourceText)
-    || findReadableSalaryInFrameworkState(card);
-  if (readable) return { text: readable, fontFamily: "", visualHtml: "", node };
-  if (node && /[Kk薪千]|[\u2200-\u22FF\u2500-\u259F\u25A0-\u25FF\uE000-\uF8FF]{2,}/.test(sourceText)) {
-    return {
-      text: sourceText,
-      fontFamily: "",
-      visualHtml: serializeSalaryVisual(node),
-      node
-    };
-  }
-  return { text: "", fontFamily: "", visualHtml: "", node: null };
-}
-
-function findReadableSalaryMetadata(node) {
-  if (!node) return "";
-  const nodes = [node, ...Array.from(node.querySelectorAll("*"))].slice(0, 40);
-  for (const current of nodes) {
-    for (const name of ["aria-label", "title", "data-salary", "data-text", "data-value", "data-original-title"]) {
-      const readable = normalizeDisplaySalary(current.getAttribute?.(name) || "");
-      if (readable) return readable;
-    }
-  }
-  return "";
-}
-
-function findReadableSalaryInFrameworkState(card) {
-  if (!card || (typeof card !== "object" && typeof card !== "function")) return "";
-  const signature = String(card.textContent || "").slice(0, 180);
-  const cached = frameworkSalaryCache.get(card);
-  if (cached?.signature === signature) return cached.salary;
-  let propertyNames = [];
-  try {
-    propertyNames = Object.getOwnPropertyNames(card);
-  } catch {
-    return "";
-  }
-  const roots = propertyNames
-    .filter((name) => /^__(?:vue|react)/i.test(name))
-    .map((name) => {
-      try {
-        return Object.getOwnPropertyDescriptor(card, name)?.value;
-      } catch {
-        return null;
-      }
-    })
-    .filter(Boolean);
-  const queue = roots.map((value) => ({ value, depth: 0 }));
-  const seen = new WeakSet();
-  let inspected = 0;
-  while (queue.length && inspected < 400) {
-    const current = queue.shift();
-    const value = current.value;
-    if (!value || (typeof value !== "object" && typeof value !== "function") || seen.has(value)) continue;
-    seen.add(value);
-    inspected += 1;
-    let descriptors;
-    try {
-      descriptors = Object.getOwnPropertyDescriptors(value);
-    } catch {
-      continue;
-    }
-    const entries = Object.entries(descriptors).filter(([, descriptor]) => "value" in descriptor);
-    entries.sort(([left], [right]) => {
-      const salaryKey = (name) => /salary|pay|wage|薪|compensation/i.test(name) ? 0 : 1;
-      return salaryKey(left) - salaryKey(right);
-    });
-    for (const [name, descriptor] of entries) {
-      const nested = descriptor.value;
-      if (typeof nested === "string" && nested.length <= 120
-          && /salary|pay|wage|薪|compensation/i.test(name)) {
-        const readable = normalizeDisplaySalary(nested);
-        if (readable) {
-          frameworkSalaryCache.set(card, { signature, salary: readable });
-          return readable;
-        }
-      } else if (current.depth < 4 && nested
-          && (typeof nested === "object" || typeof nested === "function")) {
-        queue.push({ value: nested, depth: current.depth + 1 });
-      }
-    }
-  }
-  frameworkSalaryCache.set(card, { signature, salary: "" });
-  return "";
-}
-
-function serializeSalaryVisual(node) {
-  if (!node) return "";
-  const serializeChildren = (parent, depth = 0) => {
-    if (depth > 6) return escapeHtml(parent.textContent || "");
-    return Array.from(parent.childNodes).map((child) => {
-      if (child.nodeType === Node.TEXT_NODE) return escapeHtml(child.textContent || "");
-      if (!(child instanceof Element)) return "";
-      const classes = Array.from(child.classList || [])
-        .filter((name) => /^[A-Za-z0-9_-]{1,80}$/.test(name))
-        .slice(0, 8)
-        .join(" ");
-      const classAttr = classes ? ` class="${classes}"` : "";
-      return `<span${classAttr}>${serializeChildren(child, depth + 1)}</span>`;
-    }).join("");
-  };
-  const rootClasses = Array.from(node.classList || [])
-    .filter((name) => /^[A-Za-z0-9_-]{1,80}$/.test(name))
-    .slice(0, 8)
-    .join(" ");
-  const classAttr = rootClasses ? ` ${rootClasses}` : "";
-  return `<span class="jc-salary-source${classAttr}">${serializeChildren(node)}</span>`;
-}
-
-function normalizeDisplaySalary(text) {
-  const value = cleanText(text || "");
-  if (!value) return "";
-  const salary = value.match(/\d+\s*[-~—]\s*\d+\s*[Kk](?:\s*[·,，、|｜/\\-]?\s*\d+\s*薪)?/);
-  if (salary) return cleanText(salary[0].replace(/\s+/g, ""));
-  return "";
-}
-
-function findSalaryLine(text) {
-  const lines = String(text || "").split(/\n+|\s{2,}/).map((line) => cleanText(line));
-  return lines.find((line) => /\d+\s*[-~—]\s*\d+\s*[Kk]|[█▉▊▋▌▍▎▏■\uE000-\uF8FF]{1,}\s*[-~—]\s*[█▉▊▋▌▍▎▏■\uE000-\uF8FF]{1,}\s*[Kk]/.test(line)) || "";
-}
-
-function findSalaryNode(card) {
-  const selectors = [".salary", ".job-salary", "[class*='salary']", "[class*='Salary']", "[class*='red']"];
-  for (const selector of selectors) {
-    const node = card.querySelector(selector);
-    if (node && /[Kk千薪█▉▊▋▌▍▎▏■\uE000-\uF8FF]/.test(node.textContent || "")) return node;
-  }
-  const nodes = Array.from(card.querySelectorAll("span,em,b,p,div"));
-  return nodes.find((node) => /[█▉▊▋▌▍▎▏■\uE000-\uF8FF]{2,}|[Kk]|千|薪/.test(cleanText(node.textContent || ""))) || null;
-}
-
-function salaryForAi(text) {
-  const value = cleanText(text || "");
-  const normal = normalizeDisplaySalary(value);
-  if (normal) return normal;
-  return value ? `页面加密薪资：${value}` : "";
 }
 
 function renderTitleHtml(job) {
@@ -3297,43 +2850,6 @@ function renderTitleHtml(job) {
     pieces.push(job.salaryVisualHtml);
   }
   return pieces.join(" ");
-}
-
-function cleanTitleBase(text) {
-  return cleanText(String(text || "")
-    .replace(/[\u2200-\u22FF\u2500-\u259F\u25A0-\u25FF\uE000-\uF8FF]{1,}\s*[.·\-~—]?\s*[\u2200-\u22FF\u2500-\u259F\u25A0-\u25FF\uE000-\uF8FF]{1,}\s*[Kk]?(?:\s*薪)?/g, "")
-    .replace(/[\u2200-\u22FF\u2500-\u259F\u25A0-\u25FF\uE000-\uF8FF]{1,}\s*薪/g, "")
-    .replace(/[\u2200-\u22FF\u2500-\u259F\u25A0-\u25FF\uE000-\uF8FF]{1,}/g, "")
-    .replace(/\s+(?=[^\s]*[^\p{L}\p{N}])\S+[Kk]\s*$/gu, "")
-    .replace(/\s+(?=[^\s]*[^\p{L}\p{N}])\S*薪\s*$/gu, "")
-    .replace(/\d+\s*[-~—]\s*\d+\s*[Kk]/g, "")
-    .replace(/\d+\s*薪/g, "")
-    .replace(/[-~—]\s*[Kk]\b/g, "")
-    .replace(/[·,，、|｜/\\-]+\s*$/g, "")
-    .replace(/\s+[·,，、|｜/\\-]+/g, " "));
-}
-
-function extractRequirements(text) {
-  const candidates = String(text || "").split(/\s{2,}| · | 丨 |\|/).map((item) => cleanText(item));
-  const requirementParts = [];
-  for (const item of candidates) {
-    if (!item || requirementParts.includes(item)) continue;
-    if (/^\d+\s*[-~—]\s*\d+\s*[Kk]$/.test(item)) continue;
-    if (isLocationMetadata(item)) continue;
-    if (/经验|学历|本科|大专|应届|不限|在校|实习|Java|后端|前端|测试|运维|Python|SQL|全职|兼职/.test(item)) {
-      requirementParts.push(item.slice(0, 24));
-    }
-    if (requirementParts.length >= 3) break;
-  }
-  return requirementParts.join(" · ");
-}
-
-function extractUrl(card) {
-  const link = card.querySelector("a[href]");
-  if (!link) return "";
-  const href = link.getAttribute("href") || "";
-  if (!href || /^javascript:/i.test(href)) return "";
-  return new URL(href, location.href).href;
 }
 
 function clearHighlights() {
@@ -3413,34 +2929,6 @@ function invalidateExtensionContext() {
   updateAutomationControls();
 }
 
-function cleanText(text) {
-  return String(text || "").replace(/\s+/g, " ").trim();
-}
-
-function firstUsefulLine(card, fallbackText) {
-  const lines = String(card.innerText || "").split(/\n+/)
-    .map((line) => cleanText(line))
-    .filter(Boolean);
-  const line = lines.find((item) => !/沟通|收藏|薪|发布|经验|学历/.test(item) && !isLocationMetadata(item))
-    || lines[0]
-    || fallbackText;
-  return line || "";
-}
-
-function stripObfuscatedSalary(text) {
-  return cleanText(String(text || "")
-    .replace(/[█▉▊▋▌▍▎▏■]{2,}\s*[-~—]\s*[█▉▊▋▌▍▎▏■]{2,}\s*[Kk]?/g, "")
-    .replace(/\d+\s*[-~—]\s*\d+\s*[Kk]/g, "")
-    .replace(/[█▉▊▋▌▍▎▏■]{2,}\s*薪?/g, "")
-    .replace(/薪资已隐藏/g, ""));
-}
-
-function buildJobTextForAi(job) {
-  return stripObfuscatedSalary(job.text)
-    .replace(/[█▉▊▋▌▍▎▏■]+/g, "")
-    .slice(0, 3000);
-}
-
 async function collectJobDescriptionForAnalysis(job) {
   const startedAt = Date.now();
   const cardText = buildJobTextForAi(job);
@@ -3472,20 +2960,6 @@ async function collectJobDescriptionForAnalysis(job) {
     text: `【岗位卡片】\n${cardText}\n\n【完整职位详情】\n${detailText}`,
     complete: true
   };
-}
-
-function escapeHtml(text) {
-  return String(text || "").replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "\"": "&quot;",
-    "'": "&#039;"
-  }[char]));
-}
-
-function escapeAttr(text) {
-  return String(text || "").replace(/[;"<>]/g, "");
 }
 
 function sleep(ms) {
