@@ -87,7 +87,16 @@ jobs:
           VERSION: ${{ steps.manifest.outputs.version }}
         run: |
           set -euo pipefail
-          gh release create "v${VERSION}" \
-            "dist/Job-Copilot-BOSS-Assistant-v${VERSION}.zip" \
-            --title "Job Copilot v${VERSION}" \
-            --notes-file CHANGELOG.md
+          ARCHIVE="dist/Job-Copilot-BOSS-Assistant-v${VERSION}.zip"
+          # A version can be re-published after a fix without bumping it, so
+          # refresh an existing release in place instead of failing on it.
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            gh release upload "v${VERSION}" "$ARCHIVE" --clobber
+            gh release edit "v${VERSION}" \
+              --title "Job Copilot v${VERSION}" \
+              --notes-file CHANGELOG.md
+          else
+            gh release create "v${VERSION}" "$ARCHIVE" \
+              --title "Job Copilot v${VERSION}" \
+              --notes-file CHANGELOG.md
+          fi
