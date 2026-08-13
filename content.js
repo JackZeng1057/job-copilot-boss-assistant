@@ -1,3 +1,5 @@
+// Content runtime: scans BOSS jobs, renders the assistant panel, and drives the
+// analysis and communication queue on the protected jobs tab.
 const JC_STATE = {
   jobs: [],
   analyses: new Map(),
