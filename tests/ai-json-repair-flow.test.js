@@ -65,6 +65,20 @@ function createSandbox(responses) {
   };
 }
 
+const validAnalysisJson = JSON.stringify({
+  score: 78,
+  decision: "recommend",
+  excluded: false,
+  exclusion_match: "",
+  exclusion_reason: "未命中排除项",
+  occupation_family: "软件开发",
+  target_alignment: "direct",
+  reasons: ["方向匹配"],
+  risks: [],
+  location_fit: "acceptable",
+  greeting: "您好，我的经历与岗位较匹配。"
+});
+
 (async () => {
   const localRepair = createSandbox([{
     choices: [{ message: { content: `{
@@ -101,6 +115,45 @@ function createSandbox(responses) {
   assert.equal(invalidNativeJson.fetchCount, 1,
     "an invalid structured response must fail fast without a second token-consuming model repair");
   assert.match(result.error, /JSON|结构化输出/);
+
+  const reasoningContentFallback = createSandbox([{
+    choices: [{
+      message: { content: "", reasoning_content: `分析如下：${validAnalysisJson}` },
+      finish_reason: "stop"
+    }],
+    usage: { prompt_tokens: 900, completion_tokens: 240, total_tokens: 1140 }
+  }]);
+  result = await reasoningContentFallback.analyze();
+  assert.equal(result.ok, true, result.error);
+  assert.equal(reasoningContentFallback.fetchCount, 1,
+    "valid JSON stranded in reasoning_content must be recovered without another request");
+  assert.match(result.performance.repairMethod, /local:reasoning_content/);
+
+  const emptyThenValid = createSandbox([{
+    choices: [{ message: { content: "", reasoning_content: "" }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 900, completion_tokens: 0, total_tokens: 900 }
+  }, {
+    choices: [{ message: { content: validAnalysisJson }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 920, completion_tokens: 220, total_tokens: 1140 }
+  }]);
+  result = await emptyThenValid.analyze();
+  assert.equal(result.ok, true, result.error);
+  assert.equal(emptyThenValid.fetchCount, 2,
+    "a truly empty provider response must receive exactly one focused retry");
+  assert.equal(result.performance.requestCount, 2);
+  assert.match(result.performance.repairMethod, /retry:empty_output/);
+  assert.equal(result.performance.usage.totalTokens, 2040,
+    "usage must include both the empty attempt and successful retry");
+
+  const metadataBeforeAnalysis = createSandbox([{
+    choices: [{ message: { content: `{"phase":"reasoning"}\n${validAnalysisJson}` }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 880, completion_tokens: 230, total_tokens: 1110 }
+  }]);
+  result = await metadataBeforeAnalysis.analyze();
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.analysis.score, 78);
+  assert.equal(metadataBeforeAnalysis.fetchCount, 1,
+    "a valid metadata object before the analysis must not hide the later schema-valid object");
 
   console.log("AI JSON repair flow tests passed");
 })().catch((error) => {

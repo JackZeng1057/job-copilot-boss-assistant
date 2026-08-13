@@ -27,7 +27,7 @@ for (let index = 0; index < iterations; index += 1) {
   assert.equal(parsed.score, 72);
 }
 const durationMs = performance.now() - startedAt;
-assert.ok(durationMs < 1000,
+assert.ok(durationMs < iterations,
   `local JSON repair must remain sub-millisecond on average; ${iterations} parses took ${durationMs.toFixed(1)}ms`);
 
 console.log(`AI local JSON repair performance passed: ${iterations} parses in ${durationMs.toFixed(1)}ms`);

@@ -140,7 +140,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message?.type === "communicateInIsolatedTab") {
-    // 0.9.5 no longer permits a job-detail tab for automatic communication.
+    // 1.0.0 no longer permits a job-detail tab for automatic communication.
     // The content script uses a hidden same-origin frame on the owner jobs
     // page; reject stale callers instead of silently reintroducing a tab.
     sendResponse({ ok: false, error: "isolated_detail_tabs_disabled" });
@@ -796,7 +796,7 @@ function queryTabs(queryInfo) {
 }
 
 function debuggerAttach(target) {
-  return new Promise((resolve, reject) => chrome.debugger.attach(target, "0.1", () => {
+  return new Promise((resolve, reject) => chrome.debugger.attach(target, "1.3", () => {
     const error = consumeRuntimeLastError();
     if (error) reject(new Error(error.message));
     else resolve();
@@ -887,27 +887,56 @@ async function analyzeJob(payload) {
     excludedDirections: payload.excludedDirections || settings.excludedDirections,
     currentLocation: payload.currentLocation || settings.currentLocation
   });
-  const initialResponse = await callAi(settings, prompt, 0.3);
+  const retryPrompt = `${prompt}\n\n【输出纠正】上一次请求没有返回可见正文。请关闭推理展开，只输出一个完整 JSON 对象，不要输出解释或 Markdown。`;
+  const retrySettings = { ...settings, analysisSpeed: "fast" };
+  const responses = [await callAi(settings, prompt, 0.3)];
+  let initialResponse = responses[0];
+  if (!String(initialResponse.text || "").trim()) {
+    const retryResponse = await callAi(retrySettings, retryPrompt, 0.3);
+    responses.push(retryResponse);
+    initialResponse = retryResponse;
+  }
   if (initialResponse.truncated) {
     throw new Error(
       `AI 输出因 token 上限被截断（${initialResponse.finishReason || "unknown"}），已停止本岗位分析，请重试`
     );
   }
-  const raw = initialResponse.text;
-  let parsed;
-  let repaired = false;
-  let repairMethod = "none";
+  let raw = initialResponse.text;
+  let parsedResult;
   try {
-    const parsedResult = parseJsonWithDiagnostics(raw);
-    parsed = parsedResult.value;
-    repaired = parsedResult.repaired;
-    repairMethod = parsedResult.repaired ? `local:${parsedResult.strategy}` : "none";
+    parsedResult = parseJsonWithDiagnostics(raw, validateAnalysisShape);
   } catch (firstError) {
-    throw new Error(`AI 结构化输出不是合法 JSON，已停止本岗位分析且不会发起二次修复请求：${String(firstError?.message || firstError)}`);
+    if (responses.length === 1 && initialResponse.textSource === "reasoning_content") {
+      const retryResponse = await callAi(retrySettings, retryPrompt, 0.3);
+      responses.push(retryResponse);
+      initialResponse = retryResponse;
+      if (initialResponse.truncated) {
+        throw new Error(
+          `AI 输出因 token 上限被截断（${initialResponse.finishReason || "unknown"}），已停止本岗位分析，请重试`
+        );
+      }
+      raw = initialResponse.text;
+      try {
+        parsedResult = parseJsonWithDiagnostics(raw, validateAnalysisShape);
+      } catch (retryError) {
+        throw new Error(`AI 结构化输出不是合法 JSON，空正文自动重试后仍失败：${String(retryError?.message || retryError)}`);
+      }
+    } else {
+      const retryDetail = responses.length > 1 ? "，空正文自动重试后仍失败" : "且不会发起二次修复请求";
+      throw new Error(`AI 结构化输出不是合法 JSON，已停止本岗位分析${retryDetail}：${String(firstError?.message || firstError)}`);
+    }
   }
-  validateAnalysisShape(parsed);
+  const parsed = parsedResult.value;
+  const recoveryMethods = [];
+  if (responses.length > 1) recoveryMethods.push("retry:empty_output");
+  if (initialResponse.textSource === "reasoning_content") {
+    recoveryMethods.push("local:reasoning_content");
+  }
+  if (parsedResult.repaired) recoveryMethods.push(`local:${parsedResult.strategy}`);
+  const repaired = recoveryMethods.length > 0;
+  const repairMethod = recoveryMethods.join("+") || "none";
   const analysis = normalizeAnalysis(parsed);
-  const usage = aggregateTokenUsage([initialResponse.usage]);
+  const usage = aggregateTokenUsage(responses.map((response) => response.usage));
   return {
     ok: true,
     analysis,
@@ -915,7 +944,10 @@ async function analyzeJob(payload) {
       durationMs: Date.now() - startedAt,
       repaired,
       repairMethod,
-      requestCount: Math.max(1, Number(initialResponse.requestCount) || 1),
+      requestCount: responses.reduce(
+        (total, response) => total + Math.max(1, Number(response.requestCount) || 1),
+        0
+      ),
       usage,
       analysisUsage: initialResponse.usage,
       repairUsage: null
@@ -1167,8 +1199,11 @@ async function callOpenAiCompatible(settings, content, azure = false, maxOutputT
   }
   const data = JSON.parse(text);
   const choice = data.choices?.[0];
+  const visibleText = normalizeTextContent(choice?.message?.content);
+  const reasoningText = normalizeTextContent(choice?.message?.reasoning_content);
   return {
-    text: normalizeTextContent(choice?.message?.content),
+    text: visibleText || reasoningText,
+    textSource: visibleText ? "content" : reasoningText ? "reasoning_content" : "empty",
     usage: normalizeOpenAiTokenUsage(data.usage),
     finishReason: choice?.finish_reason || null,
     truncated: choice?.finish_reason === "length",
@@ -1623,7 +1658,9 @@ function buildAnalysisPrompt({
 - 用户填写的目标方向关键词是强信号。岗位标题、标签或 JD 只要明确命中用户关键词、关键词核心词，或明显同义表达，不能给 0-19 这种淘汰分，除非存在明显硬性不满足条件。
 - 多词职业方向必须按完整语义判断，不能因为共享一个宽泛尾词就视为命中。例如“技术支持”不等于客户支持或业务支持，“前端开发”也不等于任意开发岗位。
 - 先概括岗位的主要职业类型，再判断它与用户目标是直接匹配、能力可迁移、无关还是信息不足。不要用代码式字面规则代替语义判断；软技能相通不等于职业方向相同，但有明确简历证据的可迁移能力可以合理加分。
-- 对命中关键词的岗位，先默认进入可复核区间，再根据经验年限、学历、地点、职责和简历证据上下调整。
+- 岗位标题或核心职责与用户目标方向的完整职业语义直接对应时，必须判定 target_alignment=direct，方向相关性通常应为 24-30 分。工作年限、岗位级别、公司行业或次要技能缺口不得反向降低这部分方向分。
+- target_alignment=direct 且简历至少存在一项同方向的真实工作、实习、项目或技能证据时，只要 excluded=false、地点可接受且没有明确硬性准入冲突，总分应进入 60-79 分的值得投递/沟通区间，不能停留在 50 分左右。匹配证据更充分时可进入 80 分以上。
+- 只有 JD 明确要求且候选人确实无法满足的法定资质、执业证书、安全许可或同类准入条件，才可作为使上述直接匹配低于 60 分的硬性冲突，并必须在 risks 中写明。经验年限、应届身份以及“高级/资深”标题本身都不是硬性冲突。
 - 对用户配置的任意方向都要宽召回：只要标题/JD 出现相关信号，且没有明显硬性冲突，通常进入可复核区间。
 
 排除岗位边界：
@@ -1635,9 +1672,11 @@ function buildAnalysisPrompt({
 
 统一评分参考：
 - 最终 score = 方向相关性 0-30 + 简历证据 0-25 + 岗位门槛 0-20 + 地理位置 0-10 + 机会质量 0-15。
+- 先分别确定五个维度的分数并求和，再输出最终 score；不得凭模糊的整体印象另给一个更低的总分。
 - 方向相关性必须综合岗位职业类型、核心职责和用户目标，不能只看标题。
 - 简历证据必须来自真实工作、实习、项目、技能、作品、课程或可迁移经历。
 - 岗位门槛 0-20 中，技能深度、学历和职责要求占 0-14 分；经验年限与应届身份合计 0-6 分，不能单独触发淘汰、skip 或 excluded。
+- 同一缺口只能归入一个最贴切的评分维度扣一次，禁止跨维度重复惩罚。经验年限与应届身份只影响岗位门槛中的 0-6 分，不得再次扣减方向相关性、简历证据或机会质量。
 - 对照职位卡片城市旁及完整 JD 中的“经验不限、1-3 年、3-5 年、应届”等要求；配置留空时只能依据简历时间线谨慎推断，无法确认时写入 risks，不得编造。
 - “高级、资深、5年”等不是自动淘汰词。经验或应届身份不完全匹配时，应结合真实项目、实习和可迁移能力在 0-6 分范围内调整，不得覆盖方向与简历证据。
 - 地理位置默认只是辅助因素，只有城市硬限制或明确不可接受的到岗要求才可大幅扣分。
@@ -1701,28 +1740,34 @@ function parseJson(text) {
   return parseJsonWithDiagnostics(text).value;
 }
 
-function parseJsonWithDiagnostics(text) {
+function parseJsonWithDiagnostics(text, validator = null) {
   const source = String(text || "").trim();
   const withoutFence = source
     .replace(/^\s*```(?:json|javascript|js)?\s*/i, "")
     .replace(/\s*```\s*$/i, "")
     .trim();
-  const extracted = extractFirstJsonObject(withoutFence);
-  const escaped = escapeJsonStringControlCharacters(extracted);
-  const normalized = normalizeCommonJsonSyntax(escaped);
-  const smartQuoteNormalized = normalizeCommonJsonSyntax(
-    escapeJsonStringControlCharacters(extracted.replace(/[“”]/g, "\"").replace(/[‘’]/g, "'"))
-  );
   const candidates = [
     { value: source, strategy: "strict" },
-    { value: withoutFence, strategy: "markdown_fence" },
-    { value: extracted, strategy: "object_extraction" },
-    { value: escaped, strategy: "control_characters" },
-    { value: normalized, strategy: "common_syntax" },
-    { value: closeTruncatedJson(normalized), strategy: "truncated_closure" },
-    { value: smartQuoteNormalized, strategy: "smart_quotes" },
-    { value: closeTruncatedJson(smartQuoteNormalized), strategy: "smart_quotes_truncated_closure" }
+    { value: withoutFence, strategy: "markdown_fence" }
   ];
+  const extractedObjects = extractJsonObjectCandidates(withoutFence);
+  if (!extractedObjects.length) extractedObjects.push(withoutFence);
+  extractedObjects.forEach((extracted, index) => {
+    const suffix = index ? `_${index + 1}` : "";
+    const escaped = escapeJsonStringControlCharacters(extracted);
+    const normalized = normalizeCommonJsonSyntax(escaped);
+    const smartQuoteNormalized = normalizeCommonJsonSyntax(
+      escapeJsonStringControlCharacters(extracted.replace(/[“”]/g, "\"").replace(/[‘’]/g, "'"))
+    );
+    candidates.push(
+      { value: extracted, strategy: `object_extraction${suffix}` },
+      { value: escaped, strategy: `control_characters${suffix}` },
+      { value: normalized, strategy: `common_syntax${suffix}` },
+      { value: closeTruncatedJson(normalized), strategy: `truncated_closure${suffix}` },
+      { value: smartQuoteNormalized, strategy: `smart_quotes${suffix}` },
+      { value: closeTruncatedJson(smartQuoteNormalized), strategy: `smart_quotes_truncated_closure${suffix}` }
+    );
+  });
   let lastError = null;
   const seen = new Set();
   for (const candidate of candidates) {
@@ -1731,8 +1776,10 @@ function parseJsonWithDiagnostics(text) {
     seen.add(value);
     if (!value) continue;
     try {
+      const parsed = JSON.parse(value);
+      if (typeof validator === "function") validator(parsed);
       return {
-        value: JSON.parse(value),
+        value: parsed,
         repaired: candidate.strategy !== "strict",
         strategy: candidate.strategy
       };
@@ -1744,35 +1791,53 @@ function parseJsonWithDiagnostics(text) {
 }
 
 function extractFirstJsonObject(text) {
+  return extractJsonObjectCandidates(text)[0] || String(text || "").trim();
+}
+
+function extractJsonObjectCandidates(text) {
   const source = String(text || "");
-  const start = source.indexOf("{");
-  if (start < 0) return source.trim();
-  let depth = 0;
-  let quote = "";
-  let escaped = false;
-  for (let index = start; index < source.length; index += 1) {
-    const char = source[index];
-    if (quote) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === quote) {
-        quote = "";
+  const candidates = [];
+  const seen = new Set();
+  for (let start = source.indexOf("{"); start >= 0; start = source.indexOf("{", start + 1)) {
+    let depth = 0;
+    let quote = "";
+    let escaped = false;
+    let end = -1;
+    for (let index = start; index < source.length; index += 1) {
+      const char = source[index];
+      if (quote) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === "\\") {
+          escaped = true;
+        } else if (char === quote) {
+          quote = "";
+        }
+        continue;
       }
-      continue;
+      if (char === "\"" || char === "'") {
+        quote = char;
+        continue;
+      }
+      if (char === "{") depth += 1;
+      if (char === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          end = index + 1;
+          break;
+        }
+      }
     }
-    if (char === "\"" || char === "'") {
-      quote = char;
-      continue;
+    const candidate = source.slice(start, end >= 0 ? end : source.length)
+      .replace(/\s*```\s*$/i, "")
+      .trim();
+    if (candidate && !seen.has(candidate)) {
+      seen.add(candidate);
+      candidates.push(candidate);
     }
-    if (char === "{") depth += 1;
-    if (char === "}") {
-      depth -= 1;
-      if (depth === 0) return source.slice(start, index + 1).trim();
-    }
+    if (candidates.length >= 32) break;
   }
-  return source.slice(start).replace(/\s*```\s*$/i, "").trim();
+  return candidates;
 }
 
 function normalizeCommonJsonSyntax(text) {

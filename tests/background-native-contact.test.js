@@ -17,6 +17,25 @@ const start = source.indexOf("async function dispatchTrustedContactClick(senderT
 const end = source.indexOf("async function openOrFocusManualChatTab", start);
 assert.ok(start >= 0 && end > start, "the native contact executor must exist");
 
+const attachStart = source.indexOf("function debuggerAttach(target)");
+const attachEnd = source.indexOf("function debuggerSendCommand", attachStart);
+assert.ok(attachStart >= 0 && attachEnd > attachStart, "the debugger attach wrapper must exist");
+let requestedProtocolVersion = "";
+const attachSandbox = {
+  chrome: {
+    debugger: {
+      attach(_target, protocolVersion, callback) {
+        requestedProtocolVersion = protocolVersion;
+        callback();
+      }
+    }
+  },
+  consumeRuntimeLastError: () => null,
+  Promise,
+  Error
+};
+vm.runInNewContext(`${source.slice(attachStart, attachEnd)}\nthis.debuggerAttach = debuggerAttach;`, attachSandbox);
+
 const calls = [];
 let failRelease = false;
 let failDetach = false;
@@ -57,6 +76,10 @@ const payload = {
 };
 
 (async () => {
+  await attachSandbox.debuggerAttach({ tabId: 7 });
+  assert.equal(requestedProtocolVersion, "1.3",
+    "Chrome's extension debugger transport must request CDP protocol version 1.3");
+
   const result = await sandbox.dispatchTrustedContactClick(senderTab, payload);
   assert.equal(result.dispatched, true);
   assert.deepEqual(calls.map((entry) => entry[0]), [

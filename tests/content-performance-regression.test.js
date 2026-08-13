@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const source = fs.readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8");
 const manifest = JSON.parse(fs.readFileSync(new URL("../manifest.json", `file://${__dirname}/`), "utf8"));
 
-assert.equal(manifest.version, "0.9.5", "navigation and throughput release must use version 0.9.5");
+assert.equal(manifest.version, "1.0.0", "the stable release must use version 1.0.0");
 assert.match(source, /const POST_ANALYSIS_CONTACT_DELAY_MS = 3000;/,
   "qualified jobs should wait three seconds before communication");
 assert.match(source, /const BETWEEN_JOBS_DELAY_MS = 5000;/,

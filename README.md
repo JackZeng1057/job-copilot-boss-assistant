@@ -1,6 +1,6 @@
 # Job Copilot BOSS 助手
 
-当前版本：`0.9.5`
+当前版本：`1.0.0`
 
 Job Copilot 是一个面向求职者的 Chromium 浏览器扩展。它在 BOSS 直聘职位页读取岗位信息，将用户主动配置的求职偏好、简历和完整 JD 交给用户选择的 AI 服务评分，并按用户设置的分数线处理岗位。扩展支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、Gemini generateContent、Azure OpenAI 和常见 OpenAI 兼容接口。
 
@@ -26,23 +26,23 @@ Job Copilot 是一个面向求职者的 Chromium 浏览器扩展。它在 BOSS �
 
 ### 1. 配置 AI 与分数线
 
-![AI 与基础规则配置（0.9.5 高清界面）](docs/images/configuration-hd.png)
+![AI 与基础规则配置（1.0 高清界面）](docs/images/configuration-hd.png)
 
 ### 2. 填写通用求职偏好
 
-![求职偏好配置（0.9.5 高清界面）](docs/images/preferences-hd.png)
+![求职偏好配置（1.0 高清界面）](docs/images/preferences-hd.png)
 
 ### 3. 导入简历
 
-![简历导入（0.9.5 高清界面）](docs/images/resume-import-hd.png)
+![简历导入（1.0 高清界面）](docs/images/resume-import-hd.png)
 
 ### 4. 使用职位页控制面板
 
-![职位页控制面板（0.9.5 高清界面）](docs/images/job-panel-hd.png)
+![职位页控制面板（1.0 高清界面）](docs/images/job-panel-hd.png)
 
 ### 5. 查看分析和投递进度
 
-![岗位分析进度（0.9.5 高清界面）](docs/images/progress-hd.png)
+![岗位分析进度（1.0 高清界面）](docs/images/progress-hd.png)
 
 ## 浏览器支持
 
@@ -217,7 +217,13 @@ API Key 的前缀不能可靠判断服务商，多个平台都可能使用 `sk-`
 
 ## 使用教程
 
-### 0.9.5 更新
+### 1.0 更新
+
+- 自动“立即沟通”改用浏览器原生可信点击，并在执行前验证按钮、岗位、页面地址、视口坐标和遮挡状态；插件自己的浮层不会再挡住目标按钮。
+- 沟通失败的达标岗位新增“重试沟通”，只重试当前岗位，不重复请求 AI，也不会继续跑完整队列。
+- AI 返回空正文时最多自动重试一次；兼容部分服务商把可用 JSON 放在 `reasoning_content` 的情况，并能跳过正文前的元数据对象。
+- 直接匹配的目标方向得到稳定校准，经验、应届或次要技能缺口不会跨评分维度重复扣分。
+- 延续 0.9.5 的导航保护、多厂商协议、输入预算、速度模式、单岗位重新分析和本地 JSON 容错能力。
 
 - 修复读取完整 JD 时，BOSS 前端路由绕过链接默认行为保护、将职位列表标签切到 `/job_detail/` 的问题；检测到后会自动后退并暂停。
 - 增加后台标签级导航兜底，并避免内容脚本和后台重复后退导致越过原职位列表。

@@ -39,8 +39,8 @@ const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/
     requestedPrompt = body.messages[0].content;
     const data = {
         choices: [{ message: { content: JSON.stringify({
-          score: 40,
-          decision: "manual_review",
+          score: 64,
+          decision: "recommend",
           excluded: false,
           exclusion_match: "",
           exclusion_reason: "未命中排除项",
@@ -83,8 +83,8 @@ const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/
   });
 
   assert.equal(response.ok, true);
-  assert.equal(response.analysis.score, 40);
-  assert.equal(response.analysis.decision, "manual_review");
+  assert.equal(response.analysis.score, 64);
+  assert.equal(response.analysis.decision, "recommend");
   assert.match(requestedPrompt, /完整职位详情/);
   assert.match(requestedPrompt, /具备通用技能项目经验，并完成过相关系统开发/);
   assert.match(requestedPrompt, /【前台求职配置：目标方向】\s*通用技能/);
@@ -93,6 +93,12 @@ const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/
   assert.match(requestedPrompt, /示例城市示例区/);
   assert.match(requestedPrompt, /【前台求职配置：个人经验与应届状态】\s*工作经验年限：2\.5 年；应届身份：应届生/);
   assert.match(requestedPrompt, /经验年限与应届身份合计 0-6 分/);
+  assert.match(requestedPrompt, /target_alignment=direct/);
+  assert.match(requestedPrompt, /方向相关性通常应为 24-30 分/);
+  assert.match(requestedPrompt, /总分应进入 60-79 分的值得投递\/沟通区间/);
+  assert.match(requestedPrompt, /同一缺口只能归入一个最贴切的评分维度扣一次/);
+  assert.match(requestedPrompt, /经验年限与应届身份只影响岗位门槛中的 0-6 分/);
+  assert.match(requestedPrompt, /先分别确定五个维度的分数并求和/);
   assert.match(requestedPrompt, /【前台求职配置：绝不投递岗位\/职业类型】\s*电话销售/);
   assert.match(requestedPrompt, /扩展只会把 score 限制在 0-100/);
   assert.match(requestedPrompt, /快速批量评分/);

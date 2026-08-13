@@ -5,7 +5,7 @@ const vm = require("node:vm");
 const source = fs.readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8");
 assert.match(source, /class="jc-dismiss-job"[\s\S]*data-dismiss-key=[\s\S]*aria-label="关闭检测：/,
   "each job row must render an accessible dismissal control");
-assert.match(source, /closest\("\[data-focus-key\], \[data-reanalyze-key\], \[data-retry-key\], \[data-dismiss-key\]"\)/,
+assert.match(source, /closest\("[^"\n]*\[data-dismiss-key\][^"\n]*"\)/,
   "the delegated list handler must recognize dismissal clicks");
 assert.match(source, /jobs: snapshot\.jobs\.filter\(\(job\) => !JC_STATE\.dismissedJobKeys\.has\(job\.key\)\)/,
   "a later page rescan must not add a dismissed job back to the delivery list");

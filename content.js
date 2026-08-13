@@ -9,6 +9,7 @@ const JC_STATE = {
   selectedKey: "",
   currentJobKey: "",
   retryJobKey: "",
+  retryContactJobKey: "",
   sessionOwner: false,
   remoteSession: null,
   page: {
@@ -82,8 +83,8 @@ const KNOWN_JOB_CITIES = [
   "北京", "上海", "广州", "深圳", "杭州", "南京", "苏州", "成都", "重庆", "武汉", "西安", "天津",
   "长沙", "郑州", "青岛", "厦门", "合肥", "佛山", "东莞", "宁波", "无锡", "珠海", "福州"
 ];
-const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "0.9.5";
-const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-manual-contact-v5`;
+const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "1.0.0";
+const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-manual-contact-v6`;
 const RUNTIME_PROBE_EVENT = "job-copilot-runtime-probe";
 const RUNTIME_ACK_EVENT = "job-copilot-runtime-ack";
 const OWNER_NAVIGATION_GUARD_START_EVENT = "job-copilot-owner-navigation-guard-start";
@@ -1189,12 +1190,15 @@ async function analyzeJobs(options = {}) {
   // A list-row retry is a single-job recovery action. Keep this local flag
   // after retryJobKey is consumed so completing the retry cannot silently
   // advance into the next batch while the user expects the run to stay paused.
-  const retryOnlyRun = Boolean(JC_STATE.retryJobKey);
+  const retryContactOnlyRun = Boolean(JC_STATE.retryContactJobKey);
+  const retryOnlyRun = Boolean(JC_STATE.retryJobKey) || retryContactOnlyRun;
   prepareCurrentBatch();
   if (!JC_STATE.jobs.some((job) => jobNeedsProcessing(job))) {
     if (retryOnlyRun) {
       JC_STATE.pipeline.allPaused = true;
-      setStatus("重新分析已完成，自动投递保持暂停；需要时可手动继续。");
+      setStatus(retryContactOnlyRun
+        ? "单岗位沟通重试已完成，自动投递保持暂停。"
+        : "重新分析已完成，自动投递保持暂停；需要时可手动继续。");
       updateAutomationControls();
       schedulePersistAutomationSession();
       return { completed: true, reason: "retry_completed", analyzed: 0 };
@@ -1244,12 +1248,14 @@ async function analyzeJobs(options = {}) {
 
     // A user-requested retry always runs before untouched jobs, while retaining
     // the stable job key so a failed request cannot be applied to another card.
-    const retryJob = JC_STATE.retryJobKey
-      ? JC_STATE.jobs.find((item) => item.key === JC_STATE.retryJobKey && jobNeedsProcessing(item))
+    const requestedRetryKey = JC_STATE.retryContactJobKey || JC_STATE.retryJobKey;
+    const retryJob = requestedRetryKey
+      ? JC_STATE.jobs.find((item) => item.key === requestedRetryKey && jobNeedsProcessing(item))
       : null;
     const job = retryJob || JC_STATE.jobs.find((item) => jobNeedsProcessing(item));
     if (!job) break;
     if (job.key === JC_STATE.retryJobKey) JC_STATE.retryJobKey = "";
+    if (job.key === JC_STATE.retryContactJobKey) JC_STATE.retryContactJobKey = "";
 
     const existingAnalysis = JC_STATE.analyses.get(job.key);
     if (existingAnalysis) {
@@ -1375,7 +1381,9 @@ async function analyzeJobs(options = {}) {
   if (retryOnlyRun) {
     JC_STATE.pipeline.allPaused = true;
     updateAutomationControls();
-    setStatus("重新分析已完成，自动投递保持暂停；需要时可手动继续。");
+    setStatus(retryContactOnlyRun
+      ? "单岗位沟通重试已完成，自动投递保持暂停。"
+      : "重新分析已完成，自动投递保持暂停；需要时可手动继续。");
     schedulePersistAutomationSession();
     return { completed: true, reason: "retry_completed", analyzed: analyzedCount };
   }
@@ -1746,7 +1754,7 @@ function findScrollableAncestor(node) {
 }
 
 async function communicateInHiddenFrame(job) {
-  // Kept only for backwards-compatible source references.  0.9.5 never calls
+  // Kept only for backwards-compatible source references.  1.0.0 never calls
   // this path because BOSS can classify hidden-frame clicks as automation.
   // Do not re-enable it as an automatic fallback.
   return "hidden_frame_disabled";
@@ -2213,6 +2221,8 @@ function jobKeyOverlap(previousJobs, nextJobs) {
 function invalidateCurrentPageWork() {
   JC_STATE.analysisRunId += 1;
   JC_STATE.analyzing = false;
+  JC_STATE.retryJobKey = "";
+  JC_STATE.retryContactJobKey = "";
   clearHighlights();
 }
 
@@ -2324,11 +2334,14 @@ function updateJobRow(item, job) {
   const hasReplayPayload = JC_STATE.analysisPayloads.has(job.key);
   const reanalysisDisabled = job.detached || !hasReplayPayload || reanalysisInFlight
     || ["analyzing", "contacting"].includes(progress.status);
+  const canRetryContact = !job.detached && progress.status === "attention" && isQualifiedJob(job);
+  const contactRetryDisabled = JC_STATE.analyzing || reanalysisInFlight;
   const dismissalDisabled = progress.status === "contacting";
   const meta = [job.company, job.city, job.requirements].filter(Boolean).slice(0, 2).join(" · ");
   const renderSignature = JSON.stringify([
     job.index, job.title, job.jobName, job.salary, job.salaryFontFamily, meta, job.detached,
-    progress.status, progress.detail, score, exclusionSummary, reanalysisInFlight, reanalysisDisabled
+    progress.status, progress.detail, score, exclusionSummary, reanalysisInFlight, reanalysisDisabled,
+    canRetryContact, contactRetryDisabled
   ]);
   if (item.dataset.renderSignature === renderSignature) return;
   item.dataset.renderSignature = renderSignature;
@@ -2351,6 +2364,10 @@ function updateJobRow(item, job) {
       </div>
       <span class="jc-score">${score === "--" ? "" : `${escapeHtml(String(score))} 分`}</span>
       <div class="jc-job-actions">
+        ${canRetryContact ? `<button class="jc-locate-button jc-contact-retry-button"
+          data-retry-contact-key="${escapeAttr(job.key)}"
+          title="只重新尝试沟通，不重复请求 AI"
+          ${contactRetryDisabled ? "disabled" : ""}>重试沟通</button>` : ""}
         <button class="jc-locate-button jc-retry-button" data-reanalyze-key="${escapeAttr(job.key)}"
           title="${!hasReplayPayload ? "该岗位尚无可复用的分析输入" : "使用上次采集的 JD 独立重新分析，不影响主队列"}"
           ${reanalysisDisabled ? "disabled" : ""}>${reanalysisInFlight ? "重分析中…" : "重新分析"}</button>
@@ -2387,6 +2404,7 @@ function dismissJob(key, options = {}) {
   JC_STATE.jobProgress.delete(key);
   JC_STATE.pipeline.batchKeys = JC_STATE.pipeline.batchKeys.filter((item) => item !== key);
   if (JC_STATE.retryJobKey === key) JC_STATE.retryJobKey = "";
+  if (JC_STATE.retryContactJobKey === key) JC_STATE.retryContactJobKey = "";
   if (JC_STATE.selectedKey === key) {
     JC_STATE.selectedKey = "";
     clearHighlights();
@@ -2438,7 +2456,7 @@ function installJobListEventDelegation(list) {
   list.dataset.jcDelegated = "true";
   list.addEventListener("click", (event) => {
     const button = event.target instanceof Element
-      ? event.target.closest("[data-focus-key], [data-reanalyze-key], [data-retry-key], [data-dismiss-key]")
+      ? event.target.closest("[data-focus-key], [data-reanalyze-key], [data-retry-key], [data-retry-contact-key], [data-dismiss-key]")
       : null;
     if (!button || !list.contains(button) || button.disabled) return;
     if (button.dataset.dismissKey) {
@@ -2452,6 +2470,13 @@ function installJobListEventDelegation(list) {
     if (button.dataset.reanalyzeKey) {
       reanalyzeJobInParallel(button.dataset.reanalyzeKey).catch((error) => {
         setStatus(`重新分析启动失败：${friendlyAiError(error?.message || error)}`);
+      });
+      return;
+    }
+    if (button.dataset.retryContactKey) {
+      retryContactForJob(button.dataset.retryContactKey).catch((error) => {
+        setStatus(`重新沟通启动失败：${friendlyContactError(error)}`);
+        updateAutomationControls();
       });
       return;
     }
@@ -2505,6 +2530,32 @@ async function reanalyzeJobInParallel(key) {
     JC_STATE.reanalysisInFlightKeys.delete(key);
     renderList();
   }
+}
+
+async function retryContactForJob(key) {
+  const job = JC_STATE.jobs.find((item) => item.key === key);
+  if (!job || job.detached || !job.card?.isConnected) throw new Error("岗位已离开当前页面");
+  if (!isQualifiedJob(job)) throw new Error("该岗位当前评分未达到自动沟通门槛");
+  if (JC_STATE.analyzing || progressFor(job).status === "contacting") {
+    throw new Error("当前已有自动投递步骤正在执行");
+  }
+
+  JC_STATE.completedJobKeys.delete(job.key);
+  JC_STATE.retryContactJobKey = job.key;
+  JC_STATE.pipeline.batchKeys = [job.key];
+  setJobProgress(job, "qualified", "等待重新尝试沟通，不重复分析");
+  JC_STATE.pipeline.active = true;
+  JC_STATE.pipeline.mode = "auto";
+  JC_STATE.pipeline.phase = "analysis";
+  JC_STATE.pipeline.allPaused = false;
+  JC_STATE.pipeline.pauseReason = "";
+  JC_STATE.sessionOwner = true;
+  JC_STATE.remoteSession = null;
+  await registerAutomationSession();
+  setStatus(`准备重新沟通：${job.title}`);
+  renderList();
+  updateAutomationControls();
+  ensureAnalysisWorker();
 }
 
 async function retryFailedJob(key) {
@@ -2758,37 +2809,78 @@ async function communicateOnOwnerPage(job, button = findCommunicationButtonForJo
 }
 
 async function dispatchNativeContactClick(job, button) {
-  if (!button?.isConnected || !isElementVisible(button) || !communicationButtonMatchesJob(button, job)) {
-    throw new Error("立即沟通按钮已变化，已取消原生点击");
-  }
-  const rect = button.getBoundingClientRect();
-  const x = rect.left + (rect.width / 2);
-  const y = rect.top + (rect.height / 2);
-  if (rect.width < 2 || rect.height < 2 || x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) {
-    throw new Error("立即沟通按钮不在当前可点击视口内");
-  }
-  const hit = document.elementFromPoint(x, y);
-  if (!hit || (hit !== button && !button.contains(hit))) {
-    throw new Error("立即沟通按钮被其他页面元素遮挡");
-  }
-
-  nativeAutomationContactKeys.add(job.key);
+  // The panel is a fixed, maximum-z-index overlay and commonly sits above the
+  // detail pane. It must not intercept the native hit test for a BOSS control
+  // underneath it. Keep real page overlays active so login/security dialogs
+  // still block automation.
+  const restorePointerEvents = temporarilyDisableJobCopilotPointerEvents();
   try {
-    const response = await sendMessage({
-      type: "dispatchTrustedContactClick",
-      x,
-      y,
-      pageUrl: location.href,
-      jobKey: job.key,
-      jobUrl: job.url
-    });
-    if (!response?.ok || response.dispatched !== true) {
-      throw new Error(response?.error || "浏览器原生点击未执行");
+    let point = null;
+    let preflightError = "立即沟通按钮被其他页面元素遮挡";
+    // scrollIntoView can remain in motion when the host page enables smooth
+    // scrolling. Give layout and hit testing a short bounded period to settle.
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      if (!button?.isConnected || !isElementVisible(button) || !communicationButtonMatchesJob(button, job)) {
+        throw new Error("立即沟通按钮已变化，已取消原生点击");
+      }
+      const rect = button.getBoundingClientRect();
+      const x = rect.left + (rect.width / 2);
+      const y = rect.top + (rect.height / 2);
+      if (rect.width < 2 || rect.height < 2 || x < 0 || y < 0
+          || x >= window.innerWidth || y >= window.innerHeight) {
+        preflightError = "立即沟通按钮不在当前可点击视口内";
+      } else {
+        const hit = document.elementFromPoint(x, y);
+        if (hit && (hit === button || button.contains(hit))) {
+          point = { x, y };
+          break;
+        }
+        preflightError = "立即沟通按钮被 BOSS 页面其他元素遮挡";
+      }
+      if (attempt < 11) await sleep(50);
     }
-    return true;
+    if (!point) throw new Error(preflightError);
+
+    nativeAutomationContactKeys.add(job.key);
+    try {
+      const response = await sendMessage({
+        type: "dispatchTrustedContactClick",
+        x: point.x,
+        y: point.y,
+        pageUrl: location.href,
+        jobKey: job.key,
+        jobUrl: job.url
+      });
+      if (!response?.ok || response.dispatched !== true) {
+        throw new Error(response?.error || "浏览器原生点击未执行");
+      }
+      return true;
+    } finally {
+      nativeAutomationContactKeys.delete(job.key);
+    }
   } finally {
-    nativeAutomationContactKeys.delete(job.key);
+    restorePointerEvents();
   }
+}
+
+function temporarilyDisableJobCopilotPointerEvents() {
+  const nodes = [
+    document.getElementById("job-copilot-panel"),
+    document.getElementById("job-copilot-launcher"),
+    document.getElementById("job-copilot-message-overlay")
+  ].filter(Boolean);
+  const previous = nodes.map((node) => ({
+    node,
+    value: node.style.getPropertyValue("pointer-events"),
+    priority: node.style.getPropertyPriority("pointer-events")
+  }));
+  for (const { node } of previous) node.style.setProperty("pointer-events", "none", "important");
+  return () => {
+    for (const { node, value, priority } of previous) {
+      if (value) node.style.setProperty("pointer-events", value, priority);
+      else node.style.removeProperty("pointer-events");
+    }
+  };
 }
 
 async function performIsolatedCommunication(expectedJob = {}) {

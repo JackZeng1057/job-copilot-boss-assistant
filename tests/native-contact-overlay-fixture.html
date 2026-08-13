@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Native contact overlay regression fixture</title>
+  <style>
+    body { margin: 0; min-height: 100vh; font: 16px sans-serif; }
+    #boss-contact {
+      position: fixed;
+      right: 110px;
+      top: 180px;
+      width: 150px;
+      height: 48px;
+    }
+    #job-copilot-panel {
+      position: fixed;
+      right: 40px;
+      top: 100px;
+      z-index: 2147483647;
+      width: 360px;
+      height: 320px;
+      background: rgba(255, 255, 255, .96);
+      border: 2px solid #2563eb;
+    }
+  </style>
+</head>
+<body>
+  <button id="boss-contact">立即沟通</button>
+  <aside id="job-copilot-panel">Job Copilot panel</aside>
+  <output id="result">pending</output>
+  <script>
+    function temporarilyDisableJobCopilotPointerEvents() {
+      const nodes = [
+        document.getElementById("job-copilot-panel"),
+        document.getElementById("job-copilot-launcher"),
+        document.getElementById("job-copilot-message-overlay")
+      ].filter(Boolean);
+      const previous = nodes.map((node) => ({
+        node,
+        value: node.style.getPropertyValue("pointer-events"),
+        priority: node.style.getPropertyPriority("pointer-events")
+      }));
+      for (const { node } of previous) node.style.setProperty("pointer-events", "none", "important");
+      return () => {
+        for (const { node, value, priority } of previous) {
+          if (value) node.style.setProperty("pointer-events", value, priority);
+          else node.style.removeProperty("pointer-events");
+        }
+      };
+    }
+
+    const button = document.getElementById("boss-contact");
+    const rect = button.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const before = document.elementFromPoint(x, y)?.id || "";
+    const restore = temporarilyDisableJobCopilotPointerEvents();
+    const during = document.elementFromPoint(x, y)?.id || "";
+    restore();
+    const after = document.elementFromPoint(x, y)?.id || "";
+    document.getElementById("result").textContent = JSON.stringify({ before, during, after });
+  </script>
+</body>
+</html>
