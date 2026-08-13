@@ -1,8 +1,12 @@
 .DS_Store
+
+# Local browser testing and generated output
 .playwright-cli/
 output/
 marketing/
 *.log
+
+# Credentials and machine-specific configuration
 .env
 .env.*
 !.env.example
@@ -11,6 +15,8 @@ marketing/
 *.pfx
 *.key
 local-config.*
+
+# Disposable browser profiles
 chrome-profile/
 edge-profile/
 browser-profile/
