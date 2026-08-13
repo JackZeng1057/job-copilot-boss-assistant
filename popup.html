@@ -380,7 +380,7 @@
     <summary>AI 分析用简历文本</summary>
     <div class="section-body">
     <label>主简历</label>
-    <input class="file-input" id="resumeDefaultFile" type="file" accept=".txt,.md,.pdf,application/pdf,text/plain,text/markdown" />
+    <input class="file-input" id="resumeDefaultFile" type="file" accept=".txt,.md,.pdf,.docx,application/pdf,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
     <div class="file-picker" id="resumeDefaultFilePicker">
       <span class="file-status" id="resumeDefaultFileStatus">未导入文件</span>
       <button class="file-action" type="button" data-file-trigger="resumeDefaultFile">选择文件</button>
@@ -388,7 +388,7 @@
     </div>
     <textarea id="resumeDefault" placeholder="粘贴完整简历文本，供 AI 分析岗位使用。"></textarea>
     <label>备选简历 A</label>
-    <input class="file-input" id="resumeAltAFile" type="file" accept=".txt,.md,.pdf,application/pdf,text/plain,text/markdown" />
+    <input class="file-input" id="resumeAltAFile" type="file" accept=".txt,.md,.pdf,.docx,application/pdf,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
     <div class="file-picker" id="resumeAltAFilePicker">
       <span class="file-status" id="resumeAltAFileStatus">未导入文件</span>
       <button class="file-action" type="button" data-file-trigger="resumeAltAFile">选择文件</button>
@@ -396,14 +396,14 @@
     </div>
     <textarea id="resumeAltA" placeholder="可选。用于另一类岗位或另一版表达。"></textarea>
     <label>备选简历 B</label>
-    <input class="file-input" id="resumeAltBFile" type="file" accept=".txt,.md,.pdf,application/pdf,text/plain,text/markdown" />
+    <input class="file-input" id="resumeAltBFile" type="file" accept=".txt,.md,.pdf,.docx,application/pdf,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
     <div class="file-picker" id="resumeAltBFilePicker">
       <span class="file-status" id="resumeAltBFileStatus">未导入文件</span>
       <button class="file-action" type="button" data-file-trigger="resumeAltBFile">选择文件</button>
       <button class="file-action file-clear" type="button" data-file-clear="resumeAltB">清除</button>
     </div>
     <textarea id="resumeAltB" placeholder="可选。用于第三类岗位或另一版表达。"></textarea>
-    <div class="note">支持 TXT/Markdown/PDF。PDF 会读取可复制文本；扫描件或图片型 PDF 需要先 OCR 或手动复制正文。</div>
+    <div class="note">支持 TXT/Markdown/PDF/Word (.docx)。PDF 会读取可复制文本；扫描件或图片型 PDF 需要先 OCR 或手动复制正文。旧版 .doc 请先另存为 .docx。</div>
     </div>
   </details>
   <section class="section">
