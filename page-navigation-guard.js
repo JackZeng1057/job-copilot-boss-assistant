@@ -1,3 +1,4 @@
+// Main-world route guard: keeps the automation owner tab on the BOSS jobs page.
 (() => {
   const START_EVENT = "job-copilot-owner-navigation-guard-start";
   const STOP_EVENT = "job-copilot-owner-navigation-guard-stop";
