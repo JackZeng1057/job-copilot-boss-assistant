@@ -13,7 +13,7 @@ Job Copilot 是一个面向求职者的 Chromium 浏览器扩展。它在 BOSS �
 - 扫描当前 BOSS 职位列表，不擅自切换“推荐”、行业或用户创建的职位页签。
 - 读取岗位标题、公司、薪资、地区和右侧完整 JD。
 - 支持 DeepSeek、OpenAI、Anthropic Claude、Google Gemini，以及兼容 OpenAI Chat Completions 的国内外服务商和本机模型。
-- 支持 TXT、Markdown 和可复制文本型 PDF 简历。
+- 支持 TXT、Markdown、Word（.docx）和可复制文本型 PDF 简历。
 - 支持主简历、备选简历 A、备选简历 B，并可同时勾选多份简历参与分析。
 - AI 综合求职偏好、简历证据、岗位门槛、工作地点和机会质量给出 0-100 分。
 - 达到用户分数线的岗位才执行沟通；未达标岗位直接继续。
@@ -208,6 +208,7 @@ API Key 的前缀不能可靠判断服务商，多个平台都可能使用 `sk-`
 支持的文件与处理方式：
 
 - `TXT` / `Markdown`：直接读取文本。
+- `Word (.docx)`：在本机解析文档正文，保留段落、制表符与换行；旧版 `.doc` 请先另存为 `.docx`。
 - 可复制文本型 `PDF`：使用随扩展打包的 PDF.js 和本地 CMap 资源解析，不上传到第三方文件服务。
 - 扫描件或图片型 `PDF`：PDF.js 无法进行 OCR，需要先自行 OCR，或将正文复制到文本框。
 
@@ -358,7 +359,9 @@ BOSS 页面选择器可能已更新。请暂停自动投递，记录浏览器版
 
 - `manifest.json`：Manifest V3 配置和权限。
 - `background.js`：AI 请求、会话快照、消息页返回边界和本地日志。
-- `content.js` / `content.css`：职位页识别、流程控制和页面面板。
+- `content.js` / `content.css`：职位页流程控制和页面面板。
+- `content-job-scan.js`：岗位卡片抓取与薪资、标题解析。
+- `content-panel-layout.js`：面板位置、拖拽与缩放。
 - `popup.html` / `popup.js`：本机配置和简历解析。
 - `vendor/pdfjs/`：PDF.js 及 CMap 资源。
 
@@ -367,6 +370,8 @@ BOSS 页面选择器可能已更新。请暂停自动投递，记录浏览器版
 ```bash
 node --check background.js
 node --check content.js
+node --check content-job-scan.js
+node --check content-panel-layout.js
 node --check popup.js
 for test in tests/*.test.js; do node "$test"; done
 ```
