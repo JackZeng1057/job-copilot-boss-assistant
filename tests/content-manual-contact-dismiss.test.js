@@ -8,11 +8,13 @@ const source = ["../content-job-scan.js", "../content-panel-layout.js", "../cont
 assert.match(source, /document\.addEventListener\("click", handleManualJobContactClick, true\)/,
   "manual contact detection must run before BOSS SPA navigation handlers");
 
+const labelHelperStart = source.indexOf("function isContinuationContactLabel(label)");
+assert.ok(labelHelperStart >= 0, "the existing-conversation label helper must exist");
 const handlerStart = source.indexOf("function handleManualJobContactClick(event)");
 const contactStart = source.indexOf("function containTrustedManualContactNavigation", handlerStart);
 const contactEnd = source.indexOf("function openManualChatCompanion", contactStart);
 assert.ok(handlerStart >= 0 && contactStart > handlerStart && contactEnd > contactStart);
-const handlerSource = source.slice(handlerStart, contactStart);
+const handlerSource = source.slice(labelHelperStart, contactStart);
 const contactSource = source.slice(contactStart, contactEnd);
 const containEnd = source.indexOf("async function contactManuallyWithoutOwnerNavigation", contactStart);
 const containmentSource = source.slice(contactStart, containEnd);
@@ -26,8 +28,10 @@ assert.doesNotMatch(contactSource, /communicateInIsolatedTab/,
   "a trusted manual click must not open a disposable job-detail tab");
 assert.match(contactSource, /trustedManualContactEvents\.has\(event\)[\s\S]*event\.preventDefault\(\)/,
   "native anchor navigation must be cancelled only after BOSS receives the trusted click");
-assert.match(contactSource, /observeManualCommunicationOnOwnerPage\(job\)/,
+assert.match(contactSource, /observeManualCommunicationOnOwnerPage\(job, evidenceOptions\)/,
   "manual contact must observe the original trusted BOSS click instead of replaying it");
+assert.doesNotMatch(handlerSource, /isContinuationContactLabel\(label\)[\s\S]{0,200}openExistingConversationInCompanion\(job\)/,
+  "a mapped 继续沟通 job must be contacted, not silently swapped for a chat tab");
 assert.doesNotMatch(contactSource, /node\.click\(\)|button\.click\(\)/,
   "manual contact must never replace a trusted user event with a synthetic click");
 assert.match(contactSource, /result !== ["']confirmed["'][\s\S]*throw[\s\S]*dismissJob/,
@@ -62,7 +66,7 @@ const sandbox = {
   manualContactInFlightKeys: new Set(),
   nativeAutomationContactKeys: new Set(),
   trustedManualContactEvents: new WeakSet(),
-  contactManuallyWithoutOwnerNavigation(value) { directCalls.push({ value }); },
+  contactManuallyWithoutOwnerNavigation(value, options) { directCalls.push({ value, options }); },
   openExistingConversationInCompanion() {},
   setStatus(value) { latestStatus = value; }
 };
@@ -105,12 +109,27 @@ assert.equal(sandbox.handleManualJobContactClick(modernEvent), true);
 assert.equal(directCalls.length, 2,
   "the Navigation API path must still hand the original trusted click to BOSS");
 
+const continuationButton = new FakeElement("继续沟通");
+const continuationEvent = {
+  isTrusted: true,
+  target: continuationButton,
+  defaultPrevented: false,
+  preventDefault() { prevented += 1; },
+  stopImmediatePropagation() { stopped += 1; }
+};
+sandbox.window = undefined;
+assert.equal(sandbox.handleManualJobContactClick(continuationEvent), true);
+assert.equal(directCalls.length, 3,
+  "a 继续沟通 button on a queue job must run the real contact flow");
+assert.equal(directCalls[2].options?.allowButtonLabel, false,
+  "a click that started from 继续沟通 must not accept the button label as success evidence");
+
 mappedJob = null;
 assert.equal(sandbox.handleManualJobContactClick(event), true,
   "an unmapped communication control must still be contained on the jobs page");
-assert.equal(prevented, 2);
+assert.equal(prevented, 3);
 assert.equal(stopped, 1);
-assert.equal(directCalls.length, 2, "an ambiguous job must never remove or contact another queue item");
+assert.equal(directCalls.length, 3, "an ambiguous job must never remove or contact another queue item");
 assert.match(latestStatus, /无法确认.*岗位|未识别.*岗位/);
 
 console.log("Manual contact queue identity tests passed");

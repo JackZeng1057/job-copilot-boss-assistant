@@ -24,10 +24,12 @@ assert.match(contact, /communicateOnOwnerPage\(job/,
   "new communication must run on the visible owner jobs page");
 assert.doesNotMatch(contact, /communicateInIsolatedTab/,
   "automatic communication must not create a separate detail tab");
-assert.match(contact, /\^\(继续沟通\|继续聊\|再次沟通\)\$/,
-  "existing conversations must be recognized without entering chat");
-assert.match(contact, /existing_conversation_skipped[\s\S]*return ["']already_contacted["']/,
-  "existing conversations must be recorded without clicking the chat control");
+assert.match(contact, /isContinuationContactLabel\(label\)/,
+  "an existing-conversation label must still be detected");
+assert.match(contact, /existing_conversation_contacted/,
+  "contacting a job that already shows 继续沟通 must be recorded");
+assert.doesNotMatch(contact, /return ["']already_contacted["']/,
+  "a 继续沟通 label reflects the recruiter account, not this posting, so it must not skip the contact");
 assert.match(contact, /createStayOnCurrentPageWaiter/,
   "owner-page communication must wait for the BOSS stay-on-page dialog");
 assert.match(contact, /dispatchNativeContactClick\(job, button\)/,

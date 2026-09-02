@@ -65,6 +65,14 @@ const CONTACT_CONFIRMATION_MIN_INTERVAL_MS = 250;
 const CONTACT_CONFIRMATION_FALLBACK_MS = 500;
 const CONTACT_CONFIRMATION_TIMEOUT_MS = 15000;
 const POST_ANALYSIS_CONTACT_DELAY_MS = 3000;
+// Chromium throttles timers in a hidden tab to once per second, and to once per
+// minute after five minutes hidden. Every attempt-count retry loop below is
+// therefore unbounded in wall-clock time: a 1.8s detail-match loop was observed
+// taking 5.5 minutes, after which the job was blamed on BOSS and shelved.
+const THROTTLED_TICK_RATIO = 5;
+const THROTTLED_TICK_MIN_MS = 2000;
+const THROTTLE_RECOVERY_TIMEOUT_MS = 120000;
+const THROTTLED_CONTACT_ERROR = "浏览器在后台限速了这个标签，本次沟通未能完成";
 const BETWEEN_JOBS_DELAY_MS = 5000;
 const JOB_BATCH_SIZE = 15;
 const BETWEEN_BATCHES_DELAY_MS = 60000;
@@ -179,6 +187,10 @@ function handleManualChatClick(event) {
   openManualChatCompanion(event);
 }
 
+function isContinuationContactLabel(label) {
+  return /^(继续沟通|继续聊|再次沟通)$/.test(cleanText(label || ""));
+}
+
 function handleManualJobContactClick(event) {
   if (!event.isTrusted || !isJobsPage() || !(event.target instanceof Element)) return false;
   const button = event.target.closest("a,button,[role='button']");
@@ -189,7 +201,7 @@ function handleManualJobContactClick(event) {
   if (!job) {
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (/^(继续沟通|继续聊|再次沟通)$/.test(label)) {
+    if (isContinuationContactLabel(label)) {
       openExistingConversationInCompanion();
     } else {
       setStatus("无法确认当前沟通按钮对应的队列岗位，已阻止页面跳转；请重新扫描后再试。");
@@ -209,12 +221,10 @@ function handleManualJobContactClick(event) {
     event.stopImmediatePropagation();
     return true;
   }
-  if (/^(继续沟通|继续聊|再次沟通)$/.test(label)) {
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    openExistingConversationInCompanion(job);
-    return true;
-  }
+  // A "继续沟通" label only means BOSS already has a conversation with this
+  // recruiter account - the same HR's other postings carry it too. Treating it
+  // as "this job was contacted" silently skipped real applications, so the
+  // click now runs the normal contact flow.
   // Modern Chromium's main-world Navigation API guard cancels the navigation
   // without changing this click's defaultPrevented flag, so BOSS receives the
   // trusted event unchanged. Older browsers fall back to cancelling the link
@@ -232,7 +242,9 @@ function handleManualJobContactClick(event) {
       detail: { durationMs: 13000 }
     }));
   }
-  contactManuallyWithoutOwnerNavigation(job);
+  contactManuallyWithoutOwnerNavigation(job, {
+    allowButtonLabel: !isContinuationContactLabel(label)
+  });
   return true;
 }
 
@@ -246,13 +258,13 @@ function containTrustedManualContactNavigation(event) {
   if (anchor && !event.defaultPrevented) event.preventDefault();
 }
 
-async function contactManuallyWithoutOwnerNavigation(job) {
+async function contactManuallyWithoutOwnerNavigation(job, evidenceOptions = {}) {
   manualContactInFlightKeys.add(job.key);
   setJobProgress(job, "contacting", "正在当前职位页确认手动沟通");
   setStatus(`正在确认手动沟通，职位列表保持不变：${job.title}`);
   renderList();
   try {
-    const result = await observeManualCommunicationOnOwnerPage(job);
+    const result = await observeManualCommunicationOnOwnerPage(job, evidenceOptions);
     if (result !== "confirmed") throw new Error(`当前页面未确认沟通成功：${result}`);
     if (dismissJob(job.key, { reason: "manual_contact" })) {
       logContactEvent("manual_contact_removed_from_queue", job);
@@ -269,9 +281,9 @@ async function contactManuallyWithoutOwnerNavigation(job) {
   }
 }
 
-async function observeManualCommunicationOnOwnerPage(job) {
+async function observeManualCommunicationOnOwnerPage(job, evidenceOptions = {}) {
   const ownerJobsUrl = location.href;
-  const stayWaiter = createStayOnCurrentPageWaiter(12000, job);
+  const stayWaiter = createStayOnCurrentPageWaiter(12000, job, evidenceOptions);
   document.dispatchEvent(new CustomEvent(OWNER_NAVIGATION_GUARD_START_EVENT, {
     detail: { durationMs: 13000 }
   }));
@@ -281,7 +293,8 @@ async function observeManualCommunicationOnOwnerPage(job) {
       const restored = await restoreManualOwnerJobsRoute(ownerJobsUrl);
       if (!restored) return "owner_route_escape";
     }
-    if (result === "stayed_confirmed" || result === "chat_route" || manualCommunicationConfirmed(job)) {
+    if (result === "stayed_confirmed" || result === "chat_route"
+        || manualCommunicationConfirmed(job, evidenceOptions)) {
       return "confirmed";
     }
     return communicationBlockStatus() || result || "stay_missing";
@@ -301,11 +314,14 @@ async function restoreManualOwnerJobsRoute(ownerJobsUrl) {
   return location.href === ownerJobsUrl;
 }
 
-function manualCommunicationConfirmed(job) {
+function manualCommunicationConfirmed(job, evidenceOptions = {}) {
   const button = findCommunicationButtonForJob(job);
   const label = cleanText(button?.innerText || button?.textContent || "");
-  return /^(继续沟通|继续聊|再次沟通|已沟通|发消息)$/.test(label)
-    || hasSuccessfulContactEvidence(job);
+  if (evidenceOptions.allowButtonLabel !== false
+      && /^(继续沟通|继续聊|再次沟通|已沟通|发消息)$/.test(label)) {
+    return true;
+  }
+  return hasSuccessfulContactEvidence(job, evidenceOptions);
 }
 
 function openExistingConversationInCompanion(job = null) {
@@ -1540,6 +1556,20 @@ function findScrollableAncestor(node) {
   return null;
 }
 
+// A throttled attempt proves nothing about the job, so it stays in the queue
+// and is retried once the tab is foregrounded instead of being shelved for
+// manual review.
+async function handleThrottledContact(job) {
+  const detail = "浏览器在后台限速了该标签，未能确认沟通结果，已保留岗位待重试";
+  setJobProgress(job, "qualified", detail);
+  JC_STATE.retryContactJobKey = job.key;
+  logContactEvent("contact_throttled_retry_scheduled", job);
+  setStatus(`${detail}：${job.title}。把职位标签切回前台即可继续。`);
+  renderList();
+  await waitForPageVisible(THROTTLE_RECOVERY_TIMEOUT_MS);
+  return "continue";
+}
+
 async function contactQualifiedJob(job, context) {
   // A thin wrapper so the in-flight marker is cleared on every exit — including
   // the early returns and any throw from the outcome handling below.
@@ -1593,6 +1623,7 @@ async function runQualifiedJobContact(job, context) {
     await markContactInFlight(job.key);
     result = await clickCommunicateForJob(job);
   } catch (error) {
+    if (lastContactTickReport?.throttled) return handleThrottledContact(job);
     const detail = friendlyContactError(error);
     setJobProgress(job, "attention", detail);
     completeJob(job);
@@ -1604,15 +1635,14 @@ async function runQualifiedJobContact(job, context) {
     return "superseded";
   }
 
-  if (["stayed", "stayed_confirmed", "navigated_chat", "already_contacted"].includes(result)) {
+  if (["stayed", "stayed_confirmed", "navigated_chat"].includes(result)) {
     setJobProgress(job, "contacted");
     completeJob(job);
-    setStatus(result === "already_contacted"
-      ? `该岗位已有沟通记录，未进入消息页：${job.title}。${Math.round(BETWEEN_JOBS_DELAY_MS / 1000)} 秒后继续下一个岗位。`
-      : `已在后台完成沟通，职位列表保持不变：${job.title}。${Math.round(BETWEEN_JOBS_DELAY_MS / 1000)} 秒后继续下一个岗位。`);
+    setStatus(`已在后台完成沟通，职位列表保持不变：${job.title}。${Math.round(BETWEEN_JOBS_DELAY_MS / 1000)} 秒后继续下一个岗位。`);
     renderList();
     return "continue";
   }
+  if (result === "tab_throttled") return handleThrottledContact(job);
   if (result === "detail_mismatch") {
     setJobProgress(job, "detail_mismatch", "当前职位详情与目标岗位不一致");
     completeJob(job);
@@ -2323,32 +2353,128 @@ function focusJob(key) {
   setStatus(`已定位：${job.title}`);
 }
 
+let contactTickTracker = null;
+let lastContactTickReport = null;
+
+function beginContactTickTracking() {
+  contactTickTracker = { throttled: false, maxTickMs: 0, startedAt: Date.now() };
+  return contactTickTracker;
+}
+
+function endContactTickTracking() {
+  lastContactTickReport = contactTickTracker;
+  contactTickTracker = null;
+  return lastContactTickReport;
+}
+
+// A sleep that reports how long it actually took. A tick far longer than it
+// asked for means the tab is throttled, so the loop that owns it must stop
+// pretending its attempt budget still maps to real seconds.
+async function contactSleep(ms) {
+  const startedAt = Date.now();
+  await sleep(ms);
+  const elapsed = Date.now() - startedAt;
+  if (contactTickTracker && elapsed >= Math.max(THROTTLED_TICK_MIN_MS, ms * THROTTLED_TICK_RATIO)) {
+    contactTickTracker.throttled = true;
+    contactTickTracker.maxTickMs = Math.max(contactTickTracker.maxTickMs, elapsed);
+  }
+  return elapsed;
+}
+
+function contactTabThrottled() {
+  return contactTickTracker?.throttled === true;
+}
+
+function logContactAttemptTiming(job, report) {
+  if (!report) return;
+  const visibility = typeof document === "undefined" ? "unknown" : document.visibilityState;
+  logAutomationEvent("contact_attempt_timing", {
+    job,
+    detail: [
+      `totalMs=${Date.now() - report.startedAt}`,
+      `selectMs=${Number(report.selectMs || 0)}`,
+      `contactMs=${Number(report.contactMs || 0)}`,
+      `throttled=${report.throttled === true}`,
+      `maxTickMs=${Number(report.maxTickMs || 0)}`,
+      `visibility=${visibility}`
+    ].join(";")
+  });
+}
+
+// Resolves as soon as the tab is foregrounded again. Event driven on purpose:
+// the timer that would poll for this is exactly what throttling breaks.
+function waitForPageVisible(timeoutMs) {
+  if (typeof document === "undefined" || document.visibilityState === "visible") {
+    return Promise.resolve("visible");
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") finish("visible");
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    const timer = setTimeout(() => finish("timeout"), timeoutMs);
+  });
+}
+
 async function clickCommunicateForJob(job) {
+  const tracker = beginContactTickTracking();
+  try {
+    return await runCommunicateForJob(job, tracker);
+  } finally {
+    logContactAttemptTiming(job, endContactTickTracking());
+  }
+}
+
+async function runCommunicateForJob(job, tracker) {
+  const selectStartedAt = Date.now();
   const selected = await selectJobDetail(job);
-  if (!selected) return "detail_mismatch";
+  tracker.selectMs = Date.now() - selectStartedAt;
+  if (!selected) return tracker.throttled ? "tab_throttled" : "detail_mismatch";
   const button = findCommunicationButtonForJob(job);
   if (!button) return "no_button";
 
+  // "继续沟通" reflects an existing conversation with the recruiter account,
+  // not with this posting - the same HR's other jobs show it too. Skipping on
+  // that label silently dropped applications, so contact it like any other job
+  // and let BOSS's own confirmation decide the outcome.
   const label = cleanText(button.innerText || button.textContent || "");
-  if (/^(继续沟通|继续聊|再次沟通)$/.test(label)) {
-    logContactEvent("existing_conversation_skipped", job);
-    return "already_contacted";
+  if (isContinuationContactLabel(label)) {
+    logAutomationEvent("existing_conversation_contacted", { job, detail: `label=${label}` });
   }
   // Communication must happen in the visible owner jobs page.  A hidden
   // iframe makes BOSS treat the interaction as automation and can suppress
   // the normal "留在此页 / 继续沟通" dialog.  The owner-page guard prevents
   // the same click from taking the jobs tab to chat or opening a new tab.
+  const contactStartedAt = Date.now();
   const status = await communicateOnOwnerPage(job, button);
-  logContactEvent(`owner_${status}`, job);
-  return status;
+  tracker.contactMs = Date.now() - contactStartedAt;
+  // A throttled tab starves BOSS's own scripts too, so silence here is not
+  // evidence that BOSS refused. Keep the job instead of shelving it.
+  const outcome = status === "manual_required" && tracker.throttled ? "tab_throttled" : status;
+  logContactEvent(`owner_${outcome}`, job);
+  return outcome;
 }
 
 async function communicateOnOwnerPage(job, button = findCommunicationButtonForJob(job)) {
   if (!isJobsPage() || !button) return button ? "owner_page_unavailable" : "no_button";
   const ownerJobsUrl = location.href;
+  // Capture the label before the click: a button that already read "继续沟通"
+  // cannot serve as evidence that this attempt succeeded.
+  const startedFromExistingConversation = isContinuationContactLabel(
+    button.innerText || button.textContent || ""
+  );
+  const evidenceOptions = { allowButtonLabel: !startedFromExistingConversation };
   button.scrollIntoView?.({ block: "center", inline: "center" });
   button.focus?.({ preventScroll: true });
-  const waiter = createStayOnCurrentPageWaiter(CONTACT_CONFIRMATION_TIMEOUT_MS, job);
+  const waiter = createStayOnCurrentPageWaiter(CONTACT_CONFIRMATION_TIMEOUT_MS, job, evidenceOptions);
   document.dispatchEvent(new CustomEvent(OWNER_NAVIGATION_GUARD_START_EVENT, {
     detail: { durationMs: CONTACT_CONFIRMATION_TIMEOUT_MS }
   }));
@@ -2358,9 +2484,12 @@ async function communicateOnOwnerPage(job, button = findCommunicationButtonForJo
     if (result === "chat_route" || isBossChatUrl(location.href) || isBossJobDetailUrl(location.href)) {
       const restored = await restoreManualOwnerJobsRoute(ownerJobsUrl);
       if (!restored) return "owner_route_escape";
-      return manualCommunicationConfirmed(job) ? "stayed_confirmed" : "owner_route_escape";
+      // Continuing an existing conversation legitimately lands on the chat
+      // route with no on-page confirmation, so reaching chat is the result.
+      if (startedFromExistingConversation) return "stayed_confirmed";
+      return manualCommunicationConfirmed(job, evidenceOptions) ? "stayed_confirmed" : "owner_route_escape";
     }
-    if (result === "stay_missing" && !manualCommunicationConfirmed(job)) {
+    if (result === "stay_missing" && !manualCommunicationConfirmed(job, evidenceOptions)) {
       // The browser-level click was delivered, but BOSS exposed no positive
       // confirmation. Keep the job for review instead of guessing success.
       return "manual_required";
@@ -2401,9 +2530,10 @@ async function dispatchNativeContactClick(job, button) {
         }
         preflightError = "立即沟通按钮被 BOSS 页面其他元素遮挡";
       }
-      if (attempt < 11) await sleep(50);
+      if (attempt < 11) await contactSleep(50);
+      if (contactTabThrottled()) break;
     }
-    if (!point) throw new Error(preflightError);
+    if (!point) throw new Error(contactTabThrottled() ? THROTTLED_CONTACT_ERROR : preflightError);
 
     nativeAutomationContactKeys.add(job.key);
     try {
@@ -2481,13 +2611,16 @@ async function selectJobDetail(job) {
         return false;
       }
       for (let attempt = 0; attempt < 18; attempt += 1) {
-        await sleep(100);
+        await contactSleep(100);
         if (!restoreOwnerJobsRoute(ownerJobsUrl)) {
           pauseForOwnerRouteEscape(job);
           return false;
         }
         if (detailMatchesJob(job)) return true;
         if (isBossChatUrl(location.href)) return false;
+        // Under throttling the remaining attempts cost a minute each. Bail out
+        // now so the caller can retry once the tab is responsive again.
+        if (contactTabThrottled()) return false;
       }
     }
     logContactEvent("detail_mismatch", job);
@@ -2734,7 +2867,7 @@ async function requestAiAnalysis(job, payload, options = {}) {
   }
 }
 
-function createStayOnCurrentPageWaiter(timeoutMs = 10000, expectedJob = null) {
+function createStayOnCurrentPageWaiter(timeoutMs = 10000, expectedJob = null, evidenceOptions = {}) {
   let settled = false;
   let confirmationClicked = false;
   let observer = null;
@@ -2768,12 +2901,12 @@ function createStayOnCurrentPageWaiter(timeoutMs = 10000, expectedJob = null) {
       confirmationClicked = true;
       const dialogConfirmedSend = stayOnPageDialogConfirmsSend(button);
       safeClick(button);
-      setTimeout(() => finish(dialogConfirmedSend || hasSuccessfulContactEvidence(expectedJob)
+      setTimeout(() => finish(dialogConfirmedSend || hasSuccessfulContactEvidence(expectedJob, evidenceOptions)
         ? "stayed_confirmed"
         : "stayed"), 300);
       return;
     }
-    if (hasSuccessfulContactEvidence(expectedJob)) finish("stayed");
+    if (hasSuccessfulContactEvidence(expectedJob, evidenceOptions)) finish("stayed");
   };
   const scheduleProbe = (immediate = false) => {
     if (settled || confirmationClicked || probeTimer) return;
@@ -2805,8 +2938,13 @@ function createStayOnCurrentPageWaiter(timeoutMs = 10000, expectedJob = null) {
   };
 }
 
-function hasSuccessfulContactEvidence(expectedJob = null) {
-  const controls = Array.from(document.querySelectorAll("a,button"));
+function hasSuccessfulContactEvidence(expectedJob = null, evidenceOptions = {}) {
+  // A button that already read "继续沟通" before the click proves nothing about
+  // this attempt. Callers that started from such a label must rely on BOSS's
+  // explicit send confirmation instead.
+  const controls = evidenceOptions.allowButtonLabel === false
+    ? []
+    : Array.from(document.querySelectorAll("a,button"));
   const changedControl = controls.some((item) => {
     if (isInsideJobCopilot(item) || !isElementVisible(item)) return false;
     const text = cleanText(item.innerText || item.textContent || "");

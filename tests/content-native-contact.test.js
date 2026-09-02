@@ -76,6 +76,11 @@ const runtimeSandbox = {
   isElementVisible: () => true,
   communicationButtonMatchesJob: () => true,
   sleep: async () => {},
+  // The runtime's throttle detector lives outside the extracted dispatcher.
+  throttled: false,
+  contactSleep: async () => {},
+  contactTabThrottled() { return runtimeSandbox.throttled === true; },
+  THROTTLED_CONTACT_ERROR: "浏览器在后台限速了这个标签，本次沟通未能完成",
   sendMessage: async (message) => {
     messages.push(message);
     return { ok: true, dispatched: true };
@@ -103,6 +108,13 @@ vm.runInNewContext(
     "the contact ownership marker must be cleared after dispatch");
 
   hitTarget = externalOverlay;
+  runtimeSandbox.throttled = true;
+  await assert.rejects(
+    runtimeSandbox.dispatchNativeContactClick(job, button),
+    /后台限速/,
+    "a throttled tab must be reported as throttling, not as a BOSS overlay"
+  );
+  runtimeSandbox.throttled = false;
   await assert.rejects(
     runtimeSandbox.dispatchNativeContactClick(job, button),
     /BOSS 页面其他元素遮挡/,
