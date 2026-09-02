@@ -28,6 +28,11 @@ const AUTOMATION_SESSION_KEY = "jobCopilotAutomationSessionV1";
 const AUTOMATION_LOG_KEY = "jobCopilotAutomationLogV1";
 const JOBS_TAB_GUARD_KEY = "jobCopilotJobsTabGuardV1";
 const AUTOMATION_LOG_LIMIT = 200;
+// chrome.debugger input commands resolve only once the renderer acknowledges
+// them. A blocked BOSS main thread kept one click pending for 95 seconds, so
+// every debugger step is bounded here instead of hanging the contact flow.
+const NATIVE_CLICK_TIMEOUT_MS = 20000;
+const NATIVE_CLICK_RELEASE_TIMEOUT_MS = 2000;
 const IDLE_DETECTION_INTERVAL_SECONDS = 60;
 const AI_REQUEST_TIMEOUT_MS = 60000;
 // Anthropic Messages requires max_tokens. Other supported protocols use the
@@ -376,31 +381,69 @@ async function dispatchTrustedContactClick(senderTab, payload) {
   }
 
   const debuggee = { tabId: senderTab.id };
+  const pressState = { pressed: false };
   let attached = false;
   nativeContactTabIds.add(senderTab.id);
   try {
     // chrome.debugger is the extension transport for CDP. Only the Input
     // domain is used and the session is detached immediately after one click.
     // Source: https://developer.chrome.com/docs/extensions/reference/api/debugger
-    await debuggerAttach(debuggee);
+    await withTimeout(debuggerAttach(debuggee), NATIVE_CLICK_TIMEOUT_MS,
+      "原生点击超时：浏览器调试会话未能连接");
     attached = true;
-    await debuggerSendCommand(debuggee, "Input.dispatchMouseEvent", {
-      type: "mouseMoved", x, y, button: "none", buttons: 0
-    });
-    await debuggerSendCommand(debuggee, "Input.dispatchMouseEvent", {
-      type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1
-    });
-    await debuggerSendCommand(debuggee, "Input.dispatchMouseEvent", {
-      type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1
-    });
+    await withTimeout(dispatchClickSequence(debuggee, x, y, pressState), NATIVE_CLICK_TIMEOUT_MS,
+      "原生点击超时：BOSS 页面长时间未响应点击");
     return { dispatched: true };
   } finally {
     try {
-      if (attached) await debuggerDetach(debuggee);
+      if (attached) await releaseStuckMouseButton(debuggee, x, y, pressState);
     } finally {
-      nativeContactTabIds.delete(senderTab.id);
+      try {
+        if (attached) await debuggerDetach(debuggee);
+      } finally {
+        nativeContactTabIds.delete(senderTab.id);
+      }
     }
   }
+}
+
+async function dispatchClickSequence(debuggee, x, y, pressState) {
+  await debuggerSendCommand(debuggee, "Input.dispatchMouseEvent", {
+    type: "mouseMoved", x, y, button: "none", buttons: 0
+  });
+  // Marked before the await: a press that times out may still be delivered
+  // once the renderer unblocks, so it must be treated as held down.
+  pressState.pressed = true;
+  await debuggerSendCommand(debuggee, "Input.dispatchMouseEvent", {
+    type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1
+  });
+  await debuggerSendCommand(debuggee, "Input.dispatchMouseEvent", {
+    type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1
+  });
+  pressState.pressed = false;
+}
+
+// A timeout between mousePressed and mouseReleased would otherwise detach the
+// session with the button still held down.
+async function releaseStuckMouseButton(debuggee, x, y, pressState) {
+  if (!pressState.pressed) return;
+  try {
+    await withTimeout(debuggerSendCommand(debuggee, "Input.dispatchMouseEvent", {
+      type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1
+    }), NATIVE_CLICK_RELEASE_TIMEOUT_MS, "原生点击超时：鼠标释放未确认");
+  } catch (error) {
+    // Best effort only: the detach below is what finally ends the session.
+  } finally {
+    pressState.pressed = false;
+  }
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  let timer = null;
+  const timeout = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 async function openOrFocusManualChatTab(senderTab) {

@@ -56,7 +56,10 @@
   });
   document.addEventListener(START_EVENT, (event) => {
     if (event.detail?.persistent === true) persistentGuard = true;
-    const durationMs = Math.max(1000, Math.min(20000, Number(event.detail?.durationMs) || 12000));
+    // The ceiling must cover a bounded native click plus its confirmation
+    // window: a busy BOSS main thread kept one click pending for 95 seconds,
+    // and a guard that lapsed mid-click left the tab free to route into chat.
+    const durationMs = Math.max(1000, Math.min(45000, Number(event.detail?.durationMs) || 12000));
     guardUntil = Date.now() + durationMs;
   });
   document.addEventListener(STOP_EVENT, () => {

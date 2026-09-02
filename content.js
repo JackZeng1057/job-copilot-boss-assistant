@@ -6,6 +6,7 @@ const JC_STATE = {
   analysisPayloads: new Map(),
   reanalysisInFlightKeys: new Set(),
   jobProgress: new Map(),
+  busyPageContactRetries: new Map(),
   dismissedJobKeys: new Set(),
   completedJobKeys: new Set(),
   selectedKey: "",
@@ -73,6 +74,11 @@ const THROTTLED_TICK_RATIO = 5;
 const THROTTLED_TICK_MIN_MS = 2000;
 const THROTTLE_RECOVERY_TIMEOUT_MS = 120000;
 const THROTTLED_CONTACT_ERROR = "浏览器在后台限速了这个标签，本次沟通未能完成";
+// Mirrors the service worker's bound on a native click. A click that never
+// landed says nothing about BOSS, so it must not be reported as a refusal.
+const NATIVE_CLICK_TIMEOUT_MS = 20000;
+const NATIVE_CLICK_TIMEOUT_PATTERN = /原生点击超时/;
+const MAX_BUSY_PAGE_CONTACT_RETRIES = 1;
 const BETWEEN_JOBS_DELAY_MS = 5000;
 const JOB_BATCH_SIZE = 15;
 const BETWEEN_BATCHES_DELAY_MS = 60000;
@@ -1559,6 +1565,30 @@ function findScrollableAncestor(node) {
 // A throttled attempt proves nothing about the job, so it stays in the queue
 // and is retried once the tab is foregrounded instead of being shelved for
 // manual review.
+// A click the browser never managed to deliver is not a BOSS refusal. Retry it
+// once on the assumption the page was momentarily wedged, and only then hand it
+// over for manual review — with the real reason.
+async function handleBusyPageContact(job, context) {
+  const attempts = (JC_STATE.busyPageContactRetries.get(job.key) || 0) + 1;
+  JC_STATE.busyPageContactRetries.set(job.key, attempts);
+  logContactEvent(`contact_page_busy_attempt_${attempts}`, job);
+  if (attempts > MAX_BUSY_PAGE_CONTACT_RETRIES) {
+    const detail = "BOSS 页面长时间无响应，原生点击未能送达，请人工确认该岗位";
+    setJobProgress(job, "attention", detail);
+    completeJob(job);
+    setStatus(`${detail}：${job.title}。继续处理下一个岗位。`);
+    renderList();
+    return "continue";
+  }
+  const detail = "BOSS 页面响应过慢，点击未送达，稍后重试该岗位";
+  setJobProgress(job, "qualified", detail);
+  JC_STATE.retryContactJobKey = job.key;
+  setStatus(`${detail}：${job.title}`);
+  renderList();
+  const pacingResult = await waitForPacingDelay(BETWEEN_JOBS_DELAY_MS, context);
+  return pacingResult === "ready" ? "continue" : pacingResult;
+}
+
 async function handleThrottledContact(job) {
   const detail = "浏览器在后台限速了该标签，未能确认沟通结果，已保留岗位待重试";
   setJobProgress(job, "qualified", detail);
@@ -1624,6 +1654,9 @@ async function runQualifiedJobContact(job, context) {
     result = await clickCommunicateForJob(job);
   } catch (error) {
     if (lastContactTickReport?.throttled) return handleThrottledContact(job);
+    if (NATIVE_CLICK_TIMEOUT_PATTERN.test(String(error?.message || error))) {
+      return handleBusyPageContact(job, context);
+    }
     const detail = friendlyContactError(error);
     setJobProgress(job, "attention", detail);
     completeJob(job);
@@ -1636,6 +1669,7 @@ async function runQualifiedJobContact(job, context) {
   }
 
   if (["stayed", "stayed_confirmed", "navigated_chat"].includes(result)) {
+    JC_STATE.busyPageContactRetries.delete(job.key);
     setJobProgress(job, "contacted");
     completeJob(job);
     setStatus(`已在后台完成沟通，职位列表保持不变：${job.title}。${Math.round(BETWEEN_JOBS_DELAY_MS / 1000)} 秒后继续下一个岗位。`);
@@ -1810,6 +1844,7 @@ function applyJobSnapshot(snapshot, options = {}) {
     JC_STATE.analysisPayloads.clear();
     JC_STATE.reanalysisInFlightKeys.clear();
     JC_STATE.jobProgress.clear();
+    JC_STATE.busyPageContactRetries.clear();
     // A rebound or replaced list starts its own batch sequence. Keeping the
     // previous counter made a freshly reloaded 15-job page report "batch 7".
     resetBatchProgress();
@@ -1883,6 +1918,9 @@ function pruneJobState(retainedKeys) {
   }
   for (const key of JC_STATE.jobProgress.keys()) {
     if (!retainedKeys.has(key)) JC_STATE.jobProgress.delete(key);
+  }
+  for (const key of JC_STATE.busyPageContactRetries.keys()) {
+    if (!retainedKeys.has(key)) JC_STATE.busyPageContactRetries.delete(key);
   }
 }
 
@@ -2385,6 +2423,10 @@ function contactTabThrottled() {
   return contactTickTracker?.throttled === true;
 }
 
+function recordContactDispatchDuration(durationMs) {
+  if (contactTickTracker) contactTickTracker.dispatchMs = durationMs;
+}
+
 function logContactAttemptTiming(job, report) {
   if (!report) return;
   const visibility = typeof document === "undefined" ? "unknown" : document.visibilityState;
@@ -2394,6 +2436,7 @@ function logContactAttemptTiming(job, report) {
       `totalMs=${Date.now() - report.startedAt}`,
       `selectMs=${Number(report.selectMs || 0)}`,
       `contactMs=${Number(report.contactMs || 0)}`,
+      `dispatchMs=${Number(report.dispatchMs || 0)}`,
       `throttled=${report.throttled === true}`,
       `maxTickMs=${Number(report.maxTickMs || 0)}`,
       `visibility=${visibility}`
@@ -2474,12 +2517,23 @@ async function communicateOnOwnerPage(job, button = findCommunicationButtonForJo
   const evidenceOptions = { allowButtonLabel: !startedFromExistingConversation };
   button.scrollIntoView?.({ block: "center", inline: "center" });
   button.focus?.({ preventScroll: true });
-  const waiter = createStayOnCurrentPageWaiter(CONTACT_CONFIRMATION_TIMEOUT_MS, job, evidenceOptions);
+  // The guard must outlast the click itself, not just the confirmation window.
   document.dispatchEvent(new CustomEvent(OWNER_NAVIGATION_GUARD_START_EVENT, {
-    detail: { durationMs: CONTACT_CONFIRMATION_TIMEOUT_MS }
+    detail: { durationMs: NATIVE_CLICK_TIMEOUT_MS + CONTACT_CONFIRMATION_TIMEOUT_MS }
   }));
+  let waiter = null;
   try {
+    const dispatchStartedAt = Date.now();
     await dispatchNativeContactClick(job, button);
+    recordContactDispatchDuration(Date.now() - dispatchStartedAt);
+    // BOSS only owes an answer once the click has actually landed. Starting
+    // this window before the dispatch let a slow click consume the whole
+    // budget: a 95s dispatch left BOSS zero seconds to confirm, and the job
+    // was shelved as "未返回明确确认" though it was never asked in time.
+    waiter = createStayOnCurrentPageWaiter(CONTACT_CONFIRMATION_TIMEOUT_MS, job, evidenceOptions);
+    document.dispatchEvent(new CustomEvent(OWNER_NAVIGATION_GUARD_START_EVENT, {
+      detail: { durationMs: CONTACT_CONFIRMATION_TIMEOUT_MS }
+    }));
     const result = await waiter.promise;
     if (result === "chat_route" || isBossChatUrl(location.href) || isBossJobDetailUrl(location.href)) {
       const restored = await restoreManualOwnerJobsRoute(ownerJobsUrl);
@@ -2496,7 +2550,7 @@ async function communicateOnOwnerPage(job, button = findCommunicationButtonForJo
     }
     return result;
   } finally {
-    waiter.cancel();
+    waiter?.cancel();
     document.dispatchEvent(new CustomEvent(OWNER_NAVIGATION_GUARD_STOP_EVENT));
   }
 }

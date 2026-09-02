@@ -39,13 +39,20 @@ vm.runInNewContext(`${source.slice(attachStart, attachEnd)}\nthis.debuggerAttach
 const calls = [];
 let failRelease = false;
 let failDetach = false;
+let hangInput = false;
 const sandbox = {
+  // Shortened so the timeout path is exercised without a real 20s wait.
+  NATIVE_CLICK_TIMEOUT_MS: 120,
+  NATIVE_CLICK_RELEASE_TIMEOUT_MS: 60,
+  setTimeout,
+  clearTimeout,
   nativeContactTabIds: new Set(),
   isAutomationJobsUrl: (url) => /^https:\/\/www\.zhipin\.com\/web\/geek\/jobs/.test(url),
   isBossJobDetailUrl: (url) => /^https:\/\/www\.zhipin\.com\/job_detail\//.test(url),
   debuggerAttach: async (target) => calls.push(["attach", target.tabId]),
   debuggerSendCommand: async (_target, method, params) => {
     calls.push([method, params.type]);
+    if (hangInput && params.type === "mousePressed") await new Promise(() => {});
     if (failRelease && params.type === "mouseReleased") throw new Error("release failed");
   },
   debuggerDetach: async (target) => {
@@ -56,7 +63,8 @@ const sandbox = {
   Number,
   String,
   Error,
-  Math
+  Math,
+  Promise
 };
 
 vm.runInNewContext(`${source.slice(start, end)}\nthis.dispatchTrustedContactClick = dispatchTrustedContactClick;`, sandbox);
@@ -106,6 +114,20 @@ const payload = {
     sandbox.dispatchTrustedContactClick(senderTab, { ...payload, pageUrl: `${senderTab.url}&stale=1` }),
     /页面|stale/
   );
+
+  // A blocked BOSS main thread once kept Input.dispatchMouseEvent pending for
+  // 95 seconds. The dispatch must give up, release the held button and detach.
+  calls.length = 0;
+  hangInput = true;
+  await assert.rejects(sandbox.dispatchTrustedContactClick(senderTab, payload), /原生点击超时/,
+    "an unacknowledged input command must time out instead of hanging the contact flow");
+  assert.deepEqual(calls.at(-1), ["detach", 7],
+    "a timed-out click must still detach the debugger session");
+  assert.deepEqual(calls.at(-2), ["Input.dispatchMouseEvent", "mouseReleased"],
+    "a click that timed out while held down must release the mouse button before detaching");
+  assert.equal(sandbox.nativeContactTabIds.size, 0,
+    "the per-tab lock must be released after a timeout");
+  hangInput = false;
 
   calls.length = 0;
   failRelease = true;
