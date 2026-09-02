@@ -627,16 +627,23 @@ function restoreOwnedAutomationSession(session) {
     || (session.paused ? "paused" : (session.active && session.mode === "auto" ? "analysis" : "idle")));
   JC_STATE.pipeline.allPaused = session.paused === true;
   JC_STATE.pipeline.pauseReason = String(session.pauseReason || "");
-  JC_STATE.pipeline.batchNumber = Math.max(1, Number(session.batchNumber) || 1);
-  JC_STATE.pipeline.batchKeys = Array.isArray(session.batchKeys)
-    ? session.batchKeys.filter((key) => currentKeys.has(key)).slice(0, JOB_BATCH_SIZE)
-    : [];
-  JC_STATE.pipeline.batchSize = Math.max(0, Number(session.batchSize)
-    || JC_STATE.pipeline.batchKeys.length);
-  JC_STATE.pipeline.batchWaitRemainingMs = Math.max(0, Number(session.batchWaitRemainingMs) || 0);
-  JC_STATE.pipeline.waitingForNextBatch = session.waitingForNextBatch === true
-    || JC_STATE.pipeline.batchWaitRemainingMs > 0;
-  JC_STATE.pipeline.loadingNextBatch = session.loadingNextBatch === true;
+  // Batch counters only describe the list they were counted on. A reload that
+  // renders a different list (BOSS re-queries on refresh) must start over
+  // instead of inheriting "batch 7" from the previous list.
+  if (String(session.fingerprint || "") === String(JC_STATE.page.fingerprint || "")) {
+    JC_STATE.pipeline.batchNumber = Math.max(1, Number(session.batchNumber) || 1);
+    JC_STATE.pipeline.batchKeys = Array.isArray(session.batchKeys)
+      ? session.batchKeys.filter((key) => currentKeys.has(key)).slice(0, JOB_BATCH_SIZE)
+      : [];
+    JC_STATE.pipeline.batchSize = Math.max(0, Number(session.batchSize)
+      || JC_STATE.pipeline.batchKeys.length);
+    JC_STATE.pipeline.batchWaitRemainingMs = Math.max(0, Number(session.batchWaitRemainingMs) || 0);
+    JC_STATE.pipeline.waitingForNextBatch = session.waitingForNextBatch === true
+      || JC_STATE.pipeline.batchWaitRemainingMs > 0;
+    JC_STATE.pipeline.loadingNextBatch = session.loadingNextBatch === true;
+  } else {
+    resetBatchProgress();
+  }
   const restoredContactJobKey = String(session.currentJobKey || "");
   JC_STATE.pipeline.contactInFlight = session.contactInFlight === true && Boolean(restoredContactJobKey);
   JC_STATE.currentJobKey = JC_STATE.pipeline.contactInFlight ? restoredContactJobKey : "";
@@ -1235,12 +1242,7 @@ async function startAutoPipeline() {
       return false;
     }
     if (!JC_STATE.pipeline.active || JC_STATE.pipeline.mode !== "auto") {
-      JC_STATE.pipeline.batchNumber = 1;
-      JC_STATE.pipeline.batchKeys = [];
-      JC_STATE.pipeline.batchSize = 0;
-      JC_STATE.pipeline.batchWaitRemainingMs = 0;
-      JC_STATE.pipeline.waitingForNextBatch = false;
-      JC_STATE.pipeline.loadingNextBatch = false;
+      resetBatchProgress();
       // Starting a new run on the current list must analyze its first card;
       // completion markers belong to the previous run, not this queue.
       JC_STATE.completedJobKeys.clear();
@@ -1362,6 +1364,15 @@ function jobNeedsProcessing(job) {
   if (!analysis) return progressFor(job).status !== "analyzing";
   if (JC_STATE.pipeline.mode !== "auto" || !isQualifiedJob(job)) return false;
   return !["contacted", "unavailable", "detail_mismatch", "attention"].includes(progressFor(job).status);
+}
+
+function resetBatchProgress() {
+  JC_STATE.pipeline.batchNumber = 1;
+  JC_STATE.pipeline.batchKeys = [];
+  JC_STATE.pipeline.batchSize = 0;
+  JC_STATE.pipeline.batchWaitRemainingMs = 0;
+  JC_STATE.pipeline.waitingForNextBatch = false;
+  JC_STATE.pipeline.loadingNextBatch = false;
 }
 
 function prepareCurrentBatch() {
@@ -1769,7 +1780,9 @@ function applyJobSnapshot(snapshot, options = {}) {
     JC_STATE.analysisPayloads.clear();
     JC_STATE.reanalysisInFlightKeys.clear();
     JC_STATE.jobProgress.clear();
-    JC_STATE.pipeline.batchKeys = [];
+    // A rebound or replaced list starts its own batch sequence. Keeping the
+    // previous counter made a freshly reloaded 15-job page report "batch 7".
+    resetBatchProgress();
     // A replaced list is a new legacy queue context. Do not let completion
     // markers from the previous search silently skip its first card.
     if (pageReplaced) JC_STATE.completedJobKeys.clear();
