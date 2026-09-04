@@ -89,7 +89,7 @@ const CONTACT_STATUS_SELECTOR = [
   "[class*='dialog']", "[class*='modal']", "[class*='toast']", "[class*='message']"
 ].join(",");
 const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "1.0.0";
-const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-manual-contact-v6`;
+const CONTENT_SCRIPT_VERSION = `${EXTENSION_VERSION}-manual-contact-v7`;
 // The service worker reads settings fresh on every analysis, so the page must
 // follow along or the AI scores against one pass mark while the queue gates on
 // another. Mirrors publicRuntimeSettings() in background.js.
@@ -193,6 +193,10 @@ function handleManualChatClick(event) {
   openManualChatCompanion(event);
 }
 
+function isContactActionLabel(label) {
+  return /^(立即沟通|沟通|继续沟通|继续聊|再次沟通)$/.test(cleanText(label || ""));
+}
+
 function isContinuationContactLabel(label) {
   return /^(继续沟通|继续聊|再次沟通)$/.test(cleanText(label || ""));
 }
@@ -202,7 +206,7 @@ function handleManualJobContactClick(event) {
   const button = event.target.closest("a,button,[role='button']");
   if (!button || isInsideJobCopilot(button)) return false;
   const label = cleanText(button.innerText || button.textContent || "");
-  if (!/^(立即沟通|继续沟通|继续聊|再次沟通)$/.test(label)) return false;
+  if (!isContactActionLabel(label)) return false;
   const job = findJobForCommunicationButton(button);
   if (!job) {
     event.preventDefault();
@@ -3033,10 +3037,10 @@ function stayOnPageDialogConfirmsSend(button) {
 }
 
 function findCommunicationButtons(root) {
-  const items = Array.from(root.querySelectorAll("a,button"));
+  const items = Array.from(root.querySelectorAll("a,button,[role='button']"));
   return items.filter((item) => !isInsideJobCopilot(item)
     && isElementVisible(item)
-    && /^(立即沟通|继续沟通|继续聊|再次沟通)$/.test(cleanText(item.innerText || item.textContent || "")));
+    && isContactActionLabel(item.innerText || item.textContent || ""));
 }
 
 function findCommunicationButtonForJob(job) {

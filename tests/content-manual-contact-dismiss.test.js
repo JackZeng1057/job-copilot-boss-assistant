@@ -8,7 +8,7 @@ const source = ["../content-job-scan.js", "../content-panel-layout.js", "../cont
 assert.match(source, /document\.addEventListener\("click", handleManualJobContactClick, true\)/,
   "manual contact detection must run before BOSS SPA navigation handlers");
 
-const labelHelperStart = source.indexOf("function isContinuationContactLabel(label)");
+const labelHelperStart = source.indexOf("function isContactActionLabel(label)");
 assert.ok(labelHelperStart >= 0, "the existing-conversation label helper must exist");
 const handlerStart = source.indexOf("function handleManualJobContactClick(event)");
 const contactStart = source.indexOf("function containTrustedManualContactNavigation", handlerStart);
@@ -124,12 +124,28 @@ assert.equal(directCalls.length, 3,
 assert.equal(directCalls[2].options?.allowButtonLabel, false,
   "a click that started from 继续沟通 must not accept the button label as success evidence");
 
+const plainContactButton = new FakeElement("沟通");
+const plainContactEvent = {
+  isTrusted: true,
+  target: plainContactButton,
+  defaultPrevented: false,
+  preventDefault() { prevented += 1; },
+  stopImmediatePropagation() { stopped += 1; }
+};
+assert.equal(sandbox.handleManualJobContactClick(plainContactEvent), true,
+  "the literal 沟通 button must enter the verified manual contact flow");
+assert.equal(directCalls.length, 4,
+  "a low-score job clicked through the literal 沟通 button must not be swallowed by the jobs-page route guard");
+assert.equal(directCalls[3].value.key, job.key);
+assert.equal(directCalls[3].options?.allowButtonLabel, true,
+  "the initial 沟通 label is not itself proof of an existing conversation");
+
 mappedJob = null;
 assert.equal(sandbox.handleManualJobContactClick(event), true,
   "an unmapped communication control must still be contained on the jobs page");
-assert.equal(prevented, 3);
+assert.equal(prevented, 4);
 assert.equal(stopped, 1);
-assert.equal(directCalls.length, 3, "an ambiguous job must never remove or contact another queue item");
+assert.equal(directCalls.length, 4, "an ambiguous job must never remove or contact another queue item");
 assert.match(latestStatus, /无法确认.*岗位|未识别.*岗位/);
 
 console.log("Manual contact queue identity tests passed");

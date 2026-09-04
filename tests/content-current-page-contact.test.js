@@ -9,8 +9,10 @@ const finderStart = source.indexOf("function findCommunicationButtons(root)");
 const finderEnd = source.indexOf("function findCommunicationButtonForJob(job)", finderStart);
 const finder = source.slice(finderStart, finderEnd);
 assert.ok(finderStart >= 0 && finderEnd > finderStart, "communication button finder must exist");
-assert.match(finder, /立即沟通\|继续沟通\|继续聊/,
-  "both first-contact and existing-conversation buttons must be recognized");
+assert.match(finder, /isContactActionLabel/,
+  "all communication button variants must use the shared label classifier");
+assert.match(source, /function isContactActionLabel\(label\)[\s\S]*?\^\(立即沟通\|沟通\|继续沟通\|继续聊\|再次沟通\)\$/,
+  "both the literal 沟通 label and existing-conversation labels must be recognized");
 assert.doesNotMatch(finder, /===\s*["']立即沟通["']/,
   "button recognition must not require the exact immediate-contact label");
 
