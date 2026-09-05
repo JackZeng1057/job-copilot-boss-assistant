@@ -1,9 +1,7 @@
+// 验证 token 信息仅在有对应统计数据时展示。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 const start = source.indexOf("function updateJobRow(item, job)");
 const end = source.indexOf("function dismissJob(key", start);
 assert.ok(start >= 0 && end > start, "job-row renderer must exist");

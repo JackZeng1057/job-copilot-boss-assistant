@@ -1,15 +1,9 @@
+// 验证 AI 请求超时提示、进度等待时间和关键自动化日志。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const backgroundSource = fs.readFileSync(
-  new URL("../background.js", `file://${__dirname}/`),
-  "utf8"
-);
-const contentSource = fs.readFileSync(
-  new URL("../content.js", `file://${__dirname}/`),
-  "utf8"
-);
+const backgroundSource = require("./helpers/extension-source").backgroundSource();
+const contentSource = require("./helpers/extension-source").contentSource();
 
 const timeoutConstantSource = backgroundSource.match(/const AI_REQUEST_TIMEOUT_MS = \d+;/);
 const timeoutHelperSource = backgroundSource.match(

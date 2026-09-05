@@ -1,9 +1,7 @@
+// 验证单岗位沟通重试复用评分，结束后保持队列暂停。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 
 assert.match(source, /data-retry-contact-key=/,
   "qualified attention rows must expose a contact-only retry action");

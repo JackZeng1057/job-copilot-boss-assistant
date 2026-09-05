@@ -1,8 +1,7 @@
+// 验证刷新或替换列表后批次计数按新列表重置。
 const assert = require("node:assert");
-const fs = require("node:fs");
-const path = require("node:path");
 
-const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+const source = require("./helpers/extension-source").contentSource();
 
 assert.match(source, /function resetBatchProgress\(\) \{[\s\S]*batchNumber = 1;[\s\S]*batchKeys = \[\];[\s\S]*batchSize = 0;[\s\S]*batchWaitRemainingMs = 0;[\s\S]*waitingForNextBatch = false;[\s\S]*loadingNextBatch = false;[\s\S]*\n\}/,
   "a single helper must clear every batch counter at once");

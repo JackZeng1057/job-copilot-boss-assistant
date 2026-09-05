@@ -1,10 +1,8 @@
+// 验证关闭岗位会移出本次队列，并清理关联状态。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 assert.match(source, /class="jc-dismiss-job"[\s\S]*data-dismiss-key=[\s\S]*aria-label="关闭检测：/,
   "each job row must render an accessible dismissal control");
 assert.match(source, /closest\("[^"\n]*\[data-dismiss-key\][^"\n]*"\)/,

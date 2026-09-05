@@ -1,12 +1,11 @@
+// 验证排除方向从表单存储到分析与队列判断的传递。
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 
 const popupHtml = fs.readFileSync(new URL("../popup.html", `file://${__dirname}/`), "utf8");
 const popupJs = fs.readFileSync(new URL("../popup.js", `file://${__dirname}/`), "utf8");
-const background = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
-const content = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const background = require("./helpers/extension-source").backgroundSource();
+const content = require("./helpers/extension-source").contentSource();
 
 assert.match(popupHtml, /id="excludedDirections"/);
 assert.match(popupHtml, /默认留空，不会把任何人的个人排除项应用给其他用户/);

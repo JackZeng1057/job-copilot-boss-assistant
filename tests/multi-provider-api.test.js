@@ -1,8 +1,8 @@
+// 模拟不同 AI 协议的请求与响应，验证兼容转换。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 const requests = [];
 let responseBody = {};
 const storage = {

@@ -1,7 +1,7 @@
+// 验证旧版独立详情页沟通入口被拒绝，避免创建额外投递页。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 const listenerStart = source.indexOf("chrome.runtime.onMessage.addListener");
 const listenerEnd = source.indexOf("if (chrome.tabs?.onUpdated)", listenerStart);
 const listener = source.slice(listenerStart, listenerEnd);

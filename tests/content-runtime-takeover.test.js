@@ -1,9 +1,8 @@
-const fs = require("node:fs");
-const path = require("node:path");
+// 验证扩展重载后可接管不响应的旧面板。
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+const source = require("./helpers/extension-source").contentSource();
 
 test("content runtime replaces an unresponsive stale panel after extension reload", () => {
   assert.match(source, /const SHOULD_BOOT_CONTENT_RUNTIME = !hasLiveContentRuntime\(\);/);

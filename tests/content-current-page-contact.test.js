@@ -1,9 +1,7 @@
+// 验证达标岗位在所属职位页沟通并保留页面导航边界。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 
 const finderStart = source.indexOf("function findCommunicationButtons(root)");
 const finderEnd = source.indexOf("function findCommunicationButtonForJob(job)", finderStart);

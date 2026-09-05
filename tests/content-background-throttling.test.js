@@ -1,8 +1,7 @@
+// 验证页面计时器受限时保留岗位并等待恢复，而非误判沟通失败。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 
-const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+const source = require("./helpers/extension-source").contentSource();
 
 // Chromium throttles a hidden tab's timers to once per second, then once per
 // minute. Attempt-count loops must therefore notice when their ticks stop

@@ -1,13 +1,11 @@
+// 验证用户重试优先、队列顺序和运行失效判断。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
 // Behavioural test for the queue's job-selection rules. content.js boots a
 // panel at load time and needs a DOM, so instead of loading the whole file we
 // lift the pure queue functions into a sandbox and actually call them.
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 
 function lift(signature) {
   const start = source.indexOf(signature);

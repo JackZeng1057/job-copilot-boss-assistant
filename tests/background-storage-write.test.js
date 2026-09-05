@@ -1,8 +1,8 @@
+// 验证会话标记写入失败向上传播，阻止未记录的原生点击。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 
 function lift(signature) {
   const start = source.indexOf(signature);

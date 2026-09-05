@@ -1,9 +1,7 @@
+// 验证批次转换遵守暂停状态，不在暂停期间推进任务。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 const start = source.indexOf("async function advanceToNextBatch()");
 const end = source.indexOf("function prepareCurrentBatch", start);
 const block = source.slice(start, end > start ? end : start + 5000);

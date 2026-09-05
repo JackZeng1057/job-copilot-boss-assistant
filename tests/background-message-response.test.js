@@ -1,7 +1,7 @@
+// 验证异步消息保持通道并返回错误，防止调用方无限等待。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 const listenerStart = source.indexOf("chrome.runtime.onMessage.addListener");
 const listenerEnd = source.indexOf("if (chrome.tabs?.onUpdated)", listenerStart);
 const listener = source.slice(listenerStart, listenerEnd);

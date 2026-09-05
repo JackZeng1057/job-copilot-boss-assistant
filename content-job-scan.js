@@ -1,6 +1,4 @@
-// Job-card scraping: turns BOSS's DOM into the plain job records the rest of
-// the content script works with. Nothing here reads or writes JC_STATE, so it
-// can be read and changed on its own when BOSS changes its markup.
+// 岗位 DOM 提取与文本归一化；不读写 JC_STATE，网站结构变化时集中修改这里。
 
 const KNOWN_JOB_CITIES = [
   "北京", "上海", "广州", "深圳", "杭州", "南京", "苏州", "成都", "重庆", "武汉", "西安", "天津",
@@ -31,8 +29,7 @@ function isLocationMetadata(text) {
 
 function captureJobSnapshot() {
   const jobs = findCards().map((card, index) => {
-    // innerText forces style/layout for every card. textContent is sufficient
-    // for extraction and keeps repeated list snapshots off the rendering path.
+    // 使用 textContent 避免为每张卡片强制计算布局。
     const text = cleanText(card.textContent || "");
     const salaryInfo = extractSalaryInfo(card, text);
     const jobName = extractJobName(card, text);
@@ -96,11 +93,13 @@ function findCards() {
 }
 
 function extractJobName(card, text) {
-  // querySelector with a comma returns DOM order, not selector priority. A
-  // broad job-title container may wrap both name and salary, so select the
-  // narrow name node first.
+  // 按选择器优先级逐个查找；逗号选择器按 DOM 顺序返回，可能先命中含薪资的宽容器。
   const selectors = [".job-name", "[class*='job-name']", ".job-title", "[class*='job-title']"];
-  const node = selectors.map((selector) => card.querySelector(selector)).find(Boolean);
+  let node = null;
+  for (const selector of selectors) {
+    node = card.querySelector(selector);
+    if (node) break;
+  }
   const raw = cleanText(node?.textContent || "") || firstUsefulLine(card, text);
   return cleanTitleBase(raw).slice(0, 42) || "未知岗位";
 }
@@ -170,8 +169,8 @@ function findReadableSalaryInFrameworkState(card) {
   const queue = roots.map((value) => ({ value, depth: 0 }));
   const seen = new WeakSet();
   let inspected = 0;
-  while (queue.length && inspected < 400) {
-    const current = queue.shift();
+  for (let cursor = 0; cursor < queue.length && inspected < 400; cursor += 1) {
+    const current = queue[cursor];
     const value = current.value;
     if (!value || (typeof value !== "object" && typeof value !== "function") || seen.has(value)) continue;
     seen.add(value);

@@ -1,8 +1,8 @@
+// 验证分析入口的本地 JSON 修复流程及失败后停止行为。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 
 function createSandbox(responses) {
   let listener;

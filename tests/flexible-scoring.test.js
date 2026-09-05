@@ -1,8 +1,8 @@
+// 验证评分归一化和自定义分数线，保留合法的零分阈值。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 
 (async () => {
   let listener;

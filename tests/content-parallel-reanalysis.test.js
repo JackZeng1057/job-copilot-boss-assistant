@@ -1,10 +1,8 @@
+// 验证单岗位重新分析与当前队列隔离，并按岗位键更新结果。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 const rowStart = source.indexOf("function updateJobRow(item, job)");
 const rowEnd = source.indexOf("function dismissJob", rowStart);
 const rowSource = source.slice(rowStart, rowEnd);

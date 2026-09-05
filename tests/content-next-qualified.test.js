@@ -1,10 +1,8 @@
+// 验证定位下一个达标岗位时正确跳过已处理项。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 const start = source.indexOf("function focusNextQualifiedJob()");
 const end = source.indexOf("function focusJob(key)", start);
 assert.ok(start >= 0 && end > start, "next-qualified locator must exist");

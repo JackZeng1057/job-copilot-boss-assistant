@@ -1,3 +1,4 @@
+// 验证原生点击协议、输入顺序、超时释放及调试连接清理。
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
@@ -6,7 +7,7 @@ const manifest = JSON.parse(fs.readFileSync(new URL("../manifest.json", `file://
 assert.ok(manifest.permissions.includes("debugger"),
   "browser-native contact requires the explicit debugger permission");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 const listenerStart = source.indexOf("chrome.runtime.onMessage.addListener");
 const listenerEnd = source.indexOf("if (chrome.tabs?.onUpdated)", listenerStart);
 const listener = source.slice(listenerStart, listenerEnd);
@@ -34,7 +35,7 @@ const attachSandbox = {
   Promise,
   Error
 };
-vm.runInNewContext(`${source.slice(attachStart, attachEnd)}\nthis.debuggerAttach = debuggerAttach;`, attachSandbox);
+vm.runInNewContext(require("./helpers/extension-source").readSource("background-browser.js"), attachSandbox);
 
 const calls = [];
 let failRelease = false;

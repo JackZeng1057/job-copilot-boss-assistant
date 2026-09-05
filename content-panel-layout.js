@@ -1,5 +1,4 @@
-// Panel chrome: position, drag, resize and the launcher's docked offset.
-// Talks only to the panel's own DOM and localStorage.
+// 面板位置、拖动、缩放和启动按钮停靠；仅操作面板 DOM 与本地几何配置。
 
 const PANEL_GEOMETRY_KEY = "jobCopilotPanelGeometryV2";
 

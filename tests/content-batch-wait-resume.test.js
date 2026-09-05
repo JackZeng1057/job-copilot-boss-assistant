@@ -1,9 +1,7 @@
+// 验证批次冷却暂停后的剩余等待和恢复行为。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 const start = source.indexOf("async function advanceToNextBatch()");
 const end = source.indexOf("function revealMoreJobs", start);
 const batchBlock = source.slice(start, end);

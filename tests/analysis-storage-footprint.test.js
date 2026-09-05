@@ -1,8 +1,8 @@
+// 验证持久化分析只保留必要字段，并限制历史记录数量。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 const start = source.indexOf("function sanitizeStoredAnalyses");
 const end = source.indexOf("async function appendAutomationLog", start);
 assert.ok(start >= 0 && end > start, "stored analysis compactor must exist");

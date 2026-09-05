@@ -1,9 +1,8 @@
+// 验证扫描频率、增量渲染、事件委托和历史上限不退化。
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 const manifest = JSON.parse(fs.readFileSync(new URL("../manifest.json", `file://${__dirname}/`), "utf8"));
 
 assert.equal(manifest.version, "1.0.0", "the stable release must use version 1.0.0");

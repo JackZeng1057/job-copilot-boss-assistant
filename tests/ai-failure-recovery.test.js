@@ -1,9 +1,8 @@
+// 验证网络故障保留当前岗位、暂停队列，且诊断日志隐藏凭证。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const contentSource = fs
-  .readFileSync(new URL("../content.js", `file://${__dirname}/`), "utf8")
+const contentSource = require("./helpers/extension-source").contentSource()
   .replace(/\r\n/g, "\n");
 const classifierSource = contentSource.match(
   /function isTransientAiError\(error\) \{[\s\S]*?\n\}\n\nfunction isExtensionContextError/

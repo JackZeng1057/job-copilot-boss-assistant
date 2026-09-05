@@ -44,6 +44,19 @@
       "js": [
         "content-job-scan.js",
         "content-panel-layout.js",
+        "content-state.js",
+        "content-manual-contact.js",
+        "content-panel.js",
+        "content-session.js",
+        "content-controls.js",
+        "content-analysis.js",
+        "content-pipeline.js",
+        "content-auto-contact.js",
+        "content-page-context.js",
+        "content-job-list.js",
+        "content-ai-feedback.js",
+        "content-contact.js",
+        "content-contact-evidence.js",
         "content.js"
       ],
       "css": [

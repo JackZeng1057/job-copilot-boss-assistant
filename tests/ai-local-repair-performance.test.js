@@ -1,9 +1,9 @@
+// 验证本地修复不触发额外模型请求，避免增加等待与 token 消耗。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 const { performance } = require("node:perf_hooks");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 const start = source.indexOf("function parseJsonWithDiagnostics(text");
 const end = source.indexOf("function normalizeAnalysis(data)", start);
 assert.ok(start >= 0 && end > start, "JSON repair helpers must exist");

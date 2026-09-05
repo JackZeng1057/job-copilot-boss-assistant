@@ -1,10 +1,10 @@
+// 验证结构校验拒绝无关对象，同时容忍可安全补默认值的缺失字段。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
 // Behavioural test: load background.js into a sandbox with a stubbed chrome
 // namespace and call the real functions, instead of regex-matching source text.
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 const sandbox = {
   chrome: {
     runtime: { onMessage: { addListener() {} }, lastError: null },

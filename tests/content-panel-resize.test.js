@@ -1,9 +1,8 @@
+// 验证八方向缩放、指针捕获与取消手势后的清理。
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 
-const script = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const script = require("./helpers/extension-source").contentSource();
 const styles = fs.readFileSync(new URL("../content.css", `file://${__dirname}/`), "utf8");
 
 for (const direction of ["n", "e", "s", "w", "nw", "ne", "sw", "se"]) {

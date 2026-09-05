@@ -1,8 +1,8 @@
+// 验证接口路径拼接、HTTPS 限制和 URL 内嵌凭证拒绝。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 const storage = {
   get(_keys, callback) { callback({}); },
   set(_value, callback) { callback?.(); },

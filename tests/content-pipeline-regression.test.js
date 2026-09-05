@@ -1,9 +1,7 @@
+// 验证自动投递主流程、批次节奏和会话接口的关键约束。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 
 assert.match(source, /if \(JC_STATE\.pipeline\.controlActionInFlight\) return;/,
   "only an in-flight action may suppress a duplicate control click");
@@ -31,7 +29,7 @@ assert.match(startBlock, /completedJobKeys\.clear\(\)/,
 assert.match(source, /if \(pageReplaced\) JC_STATE\.completedJobKeys\.clear\(\)/);
 assert.match(source, /phase:\s*JC_STATE\.pipeline\.phase/);
 
-const background = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const background = require("./helpers/extension-source").backgroundSource();
 assert.match(background, /"pauseReason",\s*"phase"/);
 
 console.log("Pipeline pause and first-job regression tests passed");

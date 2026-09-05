@@ -1,10 +1,8 @@
+// 验证页面将点击交给后台原生输入，并遵守命中测试与遮罩约束。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 
 assert.match(source, /const nativeAutomationContactKeys = new Set\(\)/,
   "trusted automation clicks need a separate ownership marker from real manual clicks");

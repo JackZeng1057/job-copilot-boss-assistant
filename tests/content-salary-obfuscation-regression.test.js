@@ -1,10 +1,9 @@
+// 验证加密薪资的展示、框架状态读取和传给 AI 的文本边界。
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 
 function extractFunction(name) {
   const start = source.indexOf(`function ${name}(`);

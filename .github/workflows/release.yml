@@ -1,8 +1,7 @@
 name: Release
 
-# The version comes from manifest.json, so this file no longer needs editing for
-# each release. Commit the manifest bump with the message 发布<version> (for
-# example 发布1.0.1) and push to main, or run the workflow manually.
+# 版本号读取 manifest.json；仅手动触发或提交信息为“发布<版本号>”时发布。
+# 普通代码整理提交不会上传安装包，也不会覆盖已有 Release。
 on:
   push:
     branches:
@@ -46,7 +45,9 @@ jobs:
 
       - name: Run tests
         if: steps.gate.outputs.release == 'true'
-        run: node --test "tests/*.test.js"
+        run: |
+          node scripts/check.js
+          node --test "tests/*.test.js"
 
       - name: Build extension archive
         if: steps.gate.outputs.release == 'true'
@@ -54,16 +55,8 @@ jobs:
           VERSION: ${{ steps.manifest.outputs.version }}
         run: |
           set -euo pipefail
-          # Stage only what the extension loads at runtime. Everything else —
-          # tests, docs, marketing assets, previous archives — stays out of the
-          # package users install.
-          mkdir -p dist/extension
-          cp manifest.json background.js content.js content-job-scan.js \
-             content-panel-layout.js content.css popup.html popup.js \
-             page-navigation-guard.js LICENSE dist/extension/
-          cp -R vendor dist/extension/
-          # Icons are still pending; copy them once the directory lands.
-          if [ -d icons ]; then cp -R icons dist/extension/; fi
+          # 与本地检查共用依赖清单，避免遗漏运行模块。
+          node scripts/stage-extension.js
           (cd dist/extension && zip -qr "../Job-Copilot-BOSS-Assistant-v${VERSION}.zip" .)
           unzip -l "dist/Job-Copilot-BOSS-Assistant-v${VERSION}.zip" | tail -1
 
@@ -88,8 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           ARCHIVE="dist/Job-Copilot-BOSS-Assistant-v${VERSION}.zip"
-          # A version can be re-published after a fix without bumping it, so
-          # refresh an existing release in place instead of failing on it.
+          # 同版本修复允许替换既有安装包，并更新该版本的发布说明。
           if gh release view "v${VERSION}" >/dev/null 2>&1; then
             gh release upload "v${VERSION}" "$ARCHIVE" --clobber
             gh release edit "v${VERSION}" \

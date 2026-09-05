@@ -1,4 +1,4 @@
-/* In-page Job Copilot panel, progress list, controls, and responsive states. */
+/* 职位页面板、岗位列表和操作控件样式；选择器限定在插件节点，避免影响宿主页面。 */
 #job-copilot-panel {
   position: fixed;
   top: 88px;

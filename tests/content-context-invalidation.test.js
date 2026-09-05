@@ -1,9 +1,7 @@
+// 验证扩展上下文失效时停止消息和自动化操作。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 
 assert.match(source, /function extensionContextAvailable\(\)[\s\S]*chrome\?\.runtime\?\.id/,
   "content script must detect a reloaded or invalid extension context");

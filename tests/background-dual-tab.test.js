@@ -1,8 +1,8 @@
+// 验证职位页与聊天页的会话归属、切换和导航边界。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 
 function createStorageArea(seed = {}) {
   const values = { ...seed };

@@ -1,8 +1,8 @@
+// 验证 session 存储不可用时的兼容行为和存储读取容错。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 
 async function runScenario(storageErrorMessage) {
   let listener = null;

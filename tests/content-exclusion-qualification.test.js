@@ -1,10 +1,8 @@
+// 验证命中排除条件的岗位即使达到分数线也不会沟通。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 const start = source.indexOf("function isQualifiedJob(job)");
 const end = source.indexOf("function jobNeedsProcessing(job)", start);
 assert.ok(start >= 0 && end > start, "qualified-job guard must exist");

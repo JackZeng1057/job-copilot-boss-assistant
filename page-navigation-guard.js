@@ -1,4 +1,4 @@
-// Main-world route guard: keeps the automation owner tab on the BOSS jobs page.
+// 主世界导航保护：让自动投递所属标签留在职位列表。
 (() => {
   const START_EVENT = "job-copilot-owner-navigation-guard-start";
   const STOP_EVENT = "job-copilot-owner-navigation-guard-stop";
@@ -42,10 +42,8 @@
     }
     return originalWindowOpen(url, ...args);
   };
-  // The Navigation API fires for link, Location, History and browser-initiated
-  // navigations. Cancelling here prevents the jobs document from unloading,
-  // so recovery never needs to refresh the saved jobs URL.
-  // Source: https://developer.chrome.com/docs/web-platform/navigation-api
+  // 通过 Navigation API 取消离开职位页的导航，避免依赖重载来恢复现场。
+  // 适配依据：https://developer.chrome.com/docs/web-platform/navigation-api
   window.navigation?.addEventListener("navigate", (event) => {
     const destinationUrl = event.destination?.url;
     if (!shouldBlock(destinationUrl) || event.navigationType === "traverse" || !event.cancelable) return;
@@ -56,16 +54,12 @@
   });
   document.addEventListener(START_EVENT, (event) => {
     if (event.detail?.persistent === true) persistentGuard = true;
-    // The ceiling must cover a bounded native click plus its confirmation
-    // window: a busy BOSS main thread kept one click pending for 95 seconds,
-    // and a guard that lapsed mid-click left the tab free to route into chat.
+    // 保护上限需覆盖原生点击与后续确认窗口，避免点击尚未结束时放行聊天跳转。
     const durationMs = Math.max(1000, Math.min(45000, Number(event.detail?.durationMs) || 12000));
     guardUntil = Date.now() + durationMs;
   });
   document.addEventListener(STOP_EVENT, () => {
     guardUntil = 0;
-    // A protected jobs document keeps its navigation boundary for its entire
-    // lifetime. STOP only ends a short operation-specific guard; otherwise a
-    // delayed BOSS router task can take the owner tab to chat much later.
+    // 持久保护贯穿职位文档生命周期；STOP 仅结束单次操作保护。
   });
 })();

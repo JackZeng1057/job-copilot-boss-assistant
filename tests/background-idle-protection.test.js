@@ -1,8 +1,8 @@
+// 验证机器空闲、锁定与恢复不会错误覆盖用户的暂停状态。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 
 function createStorageArea(seed = {}) {
   const values = { ...seed };

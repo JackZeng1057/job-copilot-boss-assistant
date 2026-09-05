@@ -1,8 +1,8 @@
+// 验证职业方向排除和匹配评分的边界。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 
 (async () => {
   let listener;

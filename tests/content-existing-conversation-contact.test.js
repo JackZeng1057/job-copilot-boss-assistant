@@ -1,8 +1,7 @@
+// 验证已有 HR 会话不能被误当作当前岗位已投递。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 
-const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+const source = require("./helpers/extension-source").contentSource();
 
 // A "继续沟通" label describes the recruiter account, not this posting: the same
 // HR's other jobs carry it too. Neither path may treat it as "already applied".

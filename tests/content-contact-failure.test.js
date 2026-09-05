@@ -1,9 +1,7 @@
+// 验证沟通失败保留明确结果并按既有队列规则继续或暂停。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 const start = source.indexOf("async function contactQualifiedJob(job, context)");
 const end = source.indexOf("async function waitForPacingDelay", start);
 const handler = source.slice(start, end);

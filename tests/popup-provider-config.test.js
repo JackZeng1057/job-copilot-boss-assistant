@@ -1,3 +1,4 @@
+// 验证服务商预设、旧配置迁移和接口权限申请入口。
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 

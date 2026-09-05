@@ -1,8 +1,8 @@
+// 验证服务商拒绝结构化输出参数时进行有限兼容回退。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 const requestBodies = [];
 const storage = {
   get(_keys, callback) { callback({}); },

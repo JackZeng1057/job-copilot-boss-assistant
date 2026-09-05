@@ -1,12 +1,10 @@
+// 验证原生点击前持久化岗位身份，且所有退出路径清除在途标记。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
 // Regression guard for the cross-context ordering contract: the service worker
 // must confirm the job marker is stored before the native click can navigate.
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 
 function lift(signature) {
   const start = source.indexOf(signature);
@@ -109,7 +107,7 @@ const { markContactInFlight, clearContactInFlight, buildAutomationSessionPayload
   clearContactInFlight();
   assert.equal(persistCalls, 0, "a redundant clear must be a no-op");
 
-  const background = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+  const background = require("./helpers/extension-source").backgroundSource();
   const allowed = background.slice(background.indexOf("const allowed = ["));
   for (const key of ["contactInFlight", "currentJobKey"]) {
     assert.ok(allowed.slice(0, allowed.indexOf("]")).includes(`"${key}"`),

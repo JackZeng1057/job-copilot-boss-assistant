@@ -1,11 +1,9 @@
+// 验证各协议 token 统计归一化、汇总与页面用量展示。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const backgroundSource = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
-const contentSource = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const backgroundSource = require("./helpers/extension-source").backgroundSource();
+const contentSource = require("./helpers/extension-source").contentSource();
 
 const start = backgroundSource.indexOf("function emptyTokenUsage");
 const end = backgroundSource.indexOf("async function callAi", start);

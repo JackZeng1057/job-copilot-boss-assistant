@@ -355,26 +355,31 @@ BOSS 页面选择器可能已更新。请暂停自动投递，记录浏览器版
 
 ## 开发与测试
 
-项目不需要构建步骤，核心文件如下：
+项目使用原生 JavaScript，不需要安装依赖或构建。模块职责和维护约束见 [代码结构与维护指南](docs/architecture.md)。
 
-- `manifest.json`：Manifest V3 配置和权限。
-- `background.js`：AI 请求、会话快照、消息页返回边界和本地日志。
-- `content.js` / `content.css`：职位页流程控制和页面面板。
-- `content-job-scan.js`：岗位卡片抓取与薪资、标题解析。
-- `content-panel-layout.js`：面板位置、拖拽与缩放。
-- `popup.html` / `popup.js`：本机配置和简历解析。
-- `vendor/pdfjs/`：PDF.js 及 CMap 资源。
+- `manifest.json`：权限与内容脚本加载顺序。
+- `background.js`：后台入口；通过 `importScripts` 加载 `background-*.js`。
+- `content.js`：页面启动入口；`content-*.js` 分别负责状态、扫描、面板、队列、沟通和确认。
+- `page-navigation-guard.js`：主世界导航保护，与页面控制器通过 DOM 事件协作。
+- `popup.html` / `popup.js`：设置表单；`popup-resume.js` 负责简历读取，PDF.js 按需加载。
+- `content.css`：面板样式；`vendor/pdfjs/`：原样保留的第三方 PDF 库与 CMap。
 
-运行检查：
+在扩展目录运行（Node.js 22 或更新版本）：
 
 ```bash
-node --check background.js
-node --check content.js
-node --check content-job-scan.js
-node --check content-panel-layout.js
-node --check popup.js
-for test in tests/*.test.js; do node "$test"; done
+node scripts/check.js
+node --test "tests/*.test.js"
 ```
+
+本地整理安装文件：
+
+```bash
+node scripts/stage-extension.js
+```
+
+产物位于 `dist/extension/`；该命令每次清理并重建此生成目录，不发布版本。资源清单从 manifest、脚本依赖和弹窗引用生成，避免添加模块后安装包漏文件。也可以直接将当前扩展目录加载为解压缩扩展。
+
+自动测试覆盖逻辑、加载顺序与安装资源；真实 BOSS DOM、浏览器权限弹窗和原生沟通仍需在浏览器中验证。重新加载扩展后，刷新已有职位页以加载最新内容脚本。
 
 ## 许可
 

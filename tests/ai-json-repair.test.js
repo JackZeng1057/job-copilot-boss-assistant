@@ -1,8 +1,8 @@
+// 验证模型输出的常见 JSON 格式错误可被本地修复。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 const start = source.indexOf("function parseJsonWithDiagnostics(text");
 const end = source.indexOf("function normalizeAnalysis(data)", start);
 assert.ok(start >= 0 && end > start, "JSON parser helpers must exist");

@@ -1,8 +1,8 @@
+// 验证模型因输出上限截断时停止分析，避免误用不完整评分。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 const sandbox = {
   AbortController,
   chrome: {

@@ -1,10 +1,11 @@
+// 验证沟通确认窗口从点击送达后开始，而非提前消耗确认时间。
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
 const root = path.join(__dirname, "..");
-const source = fs.readFileSync(path.join(root, "content.js"), "utf8");
-const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
+const source = require("./helpers/extension-source").contentSource();
+const background = require("./helpers/extension-source").backgroundSource();
 const guard = fs.readFileSync(path.join(root, "page-navigation-guard.js"), "utf8");
 
 const ownerStart = source.indexOf("async function communicateOnOwnerPage(job");

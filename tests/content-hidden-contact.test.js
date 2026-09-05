@@ -1,9 +1,8 @@
+// 验证沟通流程不依赖隐藏详情页或 iframe。
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 
-const source = ["../content-job-scan.js", "../content-panel-layout.js", "../content.js"]
-  .map((file) => fs.readFileSync(new URL(file, `file://${__dirname}/`), "utf8"))
-  .join("\n");
+const source = require("./helpers/extension-source").contentSource();
 const manifest = JSON.parse(fs.readFileSync(new URL("../manifest.json", `file://${__dirname}/`), "utf8"));
 
 const contactStart = source.indexOf("async function clickCommunicateForJob(job)");

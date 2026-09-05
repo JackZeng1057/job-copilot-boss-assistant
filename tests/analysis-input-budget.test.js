@@ -1,8 +1,8 @@
+// 验证简历与职位描述的输入长度预算。
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(new URL("../background.js", `file://${__dirname}/`), "utf8");
+const source = require("./helpers/extension-source").backgroundSource();
 const start = source.indexOf("function compactAnalysisText");
 const end = source.indexOf("function buildAnalysisPrompt", start);
 assert.ok(start >= 0 && end > start, "analysis input compactor must exist");

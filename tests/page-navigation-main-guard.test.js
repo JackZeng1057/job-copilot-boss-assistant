@@ -1,3 +1,4 @@
+// 验证 MAIN 世界导航保护的启停、时长和持久保护边界。
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
