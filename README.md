@@ -28,23 +28,23 @@ Job Copilot 是一个面向求职者的 Chromium 浏览器扩展。它在 BOSS �
 
 ### 1. 配置 AI 与分数线
 
-![AI 与基础规则配置（1.0 高清界面）](docs/images/configuration-hd.png)
+![AI 与基础规则配置（1.0 高清界面）](extension/docs/images/configuration-hd.png)
 
 ### 2. 填写通用求职偏好
 
-![求职偏好配置（1.0 高清界面）](docs/images/preferences-hd.png)
+![求职偏好配置（1.0 高清界面）](extension/docs/images/preferences-hd.png)
 
 ### 3. 导入简历
 
-![简历导入（1.0 高清界面）](docs/images/resume-import-hd.png)
+![简历导入（1.0 高清界面）](extension/docs/images/resume-import-hd.png)
 
 ### 4. 使用职位页控制面板
 
-![职位页控制面板（1.0 高清界面）](docs/images/job-panel-hd.png)
+![职位页控制面板（1.0 高清界面）](extension/docs/images/job-panel-hd.png)
 
 ### 5. 查看分析和投递进度
 
-![岗位分析进度（1.0 高清界面）](docs/images/progress-hd.png)
+![岗位分析进度（1.0 高清界面）](extension/docs/images/progress-hd.png)
 
 ## 浏览器支持
 
@@ -71,7 +71,7 @@ Job Copilot 是一个面向求职者的 Chromium 浏览器扩展。它在 BOSS �
 4. 选择刚才解压后、直接包含 `manifest.json` 的文件夹。
 5. 看到 `Job Copilot BOSS 助手` 卡片且右侧开关已开启，即表示安装成功。
 
-![Edge 加载已解压扩展](docs/images/install-edge.png)
+![Edge 加载已解压扩展](extension/docs/images/install-edge.png)
 
 ### 3. 在 Google Chrome 中安装
 
@@ -81,7 +81,7 @@ Job Copilot 是一个面向求职者的 Chromium 浏览器扩展。它在 BOSS �
 4. 选择刚才解压后、直接包含 `manifest.json` 的文件夹。
 5. 看到 `Job Copilot BOSS 助手` 卡片且开关已开启，即表示安装成功。
 
-![Chrome 加载已解压扩展](docs/images/install-chrome.png)
+![Chrome 加载已解压扩展](extension/docs/images/install-chrome.png)
 
 Chrome 与 Edge 的扩展管理页布局略有不同，但安装流程和所选目录完全相同。截图中的扩展 ID 由所加载的源码目录生成，仅用于确认扩展已经成功加载，无需手动填写。
 
@@ -94,7 +94,7 @@ Chrome 与 Edge 的扩展管理页布局略有不同，但安装流程和所选�
 5. 点击“保存”，并在浏览器询问时允许访问所填写的 AI 接口域名。
 6. 登录 BOSS 直聘并进入职位列表页，点击页面右侧的 `JC` 按钮开始使用。
 
-![固定 Job Copilot 到浏览器工具栏](docs/images/pin-extension-toolbar.png)
+![固定 Job Copilot 到浏览器工具栏](extension/docs/images/pin-extension-toolbar.png)
 
 图中 `1` 是浏览器的扩展菜单，`2` 是固定后显示的 Job Copilot 图标。Edge 与 Chrome 的按钮位置可能略有差异。若工具栏没有显示 `J` 图标，请重新打开扩展菜单并确认 Job Copilot 已固定；不要在网页中的账号头像附近寻找插件入口。
 
@@ -112,7 +112,7 @@ Chrome 与 Edge 的扩展管理页布局略有不同，但安装流程和所选�
 
 ### 首次配置四步法
 
-![Job Copilot 首次配置标注](docs/images/configuration-annotated.png)
+![Job Copilot 首次配置标注](extension/docs/images/configuration-annotated.png)
 
 1. **选择服务商**：选择 API Key 所属的 AI 厂商。常见厂商会自动匹配接口协议、认证方式和地址。
 2. **填写 API Key**：粘贴自己从厂商官方控制台创建的密钥。输入后界面只显示圆点；README、Issue 和截图中都不要公开真实密钥。
@@ -183,7 +183,7 @@ API Key 的前缀不能可靠判断服务商，多个平台都可能使用 `sk-`
 
 ### 求职偏好
 
-![个人求职偏好配置标注](docs/images/preferences-annotated.png)
+![个人求职偏好配置标注](extension/docs/images/preferences-annotated.png)
 
 1. **目标城市/通勤回答**：填写希望工作的城市、区域及可接受的通勤范围，例如“杭州；滨江、余杭优先，可接受地铁 60 分钟”。这里写求职范围，不要填写身份证号或家庭详细住址。
 2. **目标方向/关键词**：使用逗号分隔希望寻找的岗位方向、技能或行业，例如“前端开发，软件测试，数据分析”。可以填写多个方向，AI 会结合勾选的简历和实际 JD 判断，不是简单按单个词命中。
@@ -198,7 +198,7 @@ API Key 的前缀不能可靠判断服务商，多个平台都可能使用 `sk-`
 
 ### 简历导入
 
-![个人简历导入配置标注](docs/images/resume-import-annotated.png)
+![个人简历导入配置标注](extension/docs/images/resume-import-annotated.png)
 
 1. **主简历**：上传最通用或最希望优先使用的一份简历。可选择文件，也可以把完整简历正文直接粘贴到下方文本框。
 2. **备选简历 A**：用于另一类岗位方向，例如把开发经历和测试经历分别整理成不同版本。不需要多方向时可以留空。
@@ -247,7 +247,7 @@ API Key 的前缀不能可靠判断服务商，多个平台都可能使用 `sk-`
 - 自动投递改为主按钮单次确认启动，并增加启动中状态，避免重复点击和重复扫描。
 - “定位下一个达标岗位”只定位真正达到最低分的岗位。
 
-完整版本记录见 [`CHANGELOG.md`](CHANGELOG.md)。
+完整版本记录见 [`CHANGELOG.md`](extension/CHANGELOG.md)。
 
 1. 登录 BOSS 直聘并打开任意职位列表页。
 2. 点击页面右侧 `JC` 按钮打开面板。
@@ -291,7 +291,7 @@ AI 综合求职配置、所有已勾选简历、完整 JD、岗位门槛、地�
 
 “目标方向”表示希望投递的方向；“绝不投递岗位/职业类型”表示无论分数多高都要跳过的职业类型。排除项默认留空，只保存在当前用户浏览器中。AI 必须按岗位核心工作内容进行完整语义判断，不能因为共享“销售、运营、支持”等宽泛词就误排除。
 
-明确命中排除项时，扩展将分数限制在 19 分以下并强制跳过；未命中时仍按 AI 最终分和用户最低分判断。完整边界见 [`docs/scoring-system-spec.md`](docs/scoring-system-spec.md)。
+明确命中排除项时，扩展将分数限制在 19 分以下并强制跳过；未命中时仍按 AI 最终分和用户最低分判断。完整边界见 [`docs/scoring-system-spec.md`](extension/docs/scoring-system-spec.md)。
 
 ## 隐私与权限
 
@@ -355,7 +355,7 @@ BOSS 页面选择器可能已更新。请暂停自动投递，记录浏览器版
 
 ## 开发与测试
 
-项目使用原生 JavaScript，不需要安装依赖或构建。模块职责和维护约束见 [代码结构与维护指南](docs/architecture.md)。
+项目使用原生 JavaScript，不需要安装依赖或构建。模块职责和维护约束见 [代码结构与维护指南](extension/docs/architecture.md)。
 
 - `manifest.json`：权限与内容脚本加载顺序。
 - `background.js`：后台入口；通过 `importScripts` 加载 `background-*.js`。
@@ -364,26 +364,27 @@ BOSS 页面选择器可能已更新。请暂停自动投递，记录浏览器版
 - `popup.html` / `popup.js`：设置表单；`popup-resume.js` 负责简历读取，PDF.js 按需加载。
 - `content.css`：面板样式；`vendor/pdfjs/`：原样保留的第三方 PDF 库与 CMap。
 
-在扩展目录运行（Node.js 22 或更新版本）：
+从仓库根目录进入 `extension/` 后运行（Node.js 22 或更新版本）：
 
 ```bash
+cd extension
 node scripts/check.js
 node --test "tests/*.test.js"
 ```
 
-本地整理安装文件：
+继续在 `extension/` 目录中整理安装文件：
 
 ```bash
 node scripts/stage-extension.js
 ```
 
-产物位于 `dist/extension/`；该命令每次清理并重建此生成目录，不发布版本。资源清单从 manifest、脚本依赖和弹窗引用生成，避免添加模块后安装包漏文件。也可以直接将当前扩展目录加载为解压缩扩展。
+产物位于仓库的 `extension/dist/extension/`；该命令每次清理并重建此生成目录，不发布版本。资源清单从 manifest、脚本依赖和弹窗引用生成，避免添加模块后安装包漏文件。也可以直接将当前扩展目录加载为解压缩扩展。
 
 自动测试覆盖逻辑、加载顺序与安装资源；真实 BOSS DOM、浏览器权限弹窗和原生沟通仍需在浏览器中验证。重新加载扩展后，刷新已有职位页以加载最新内容脚本。
 
 ## 许可
 
-本项目采用 [Job Copilot Source-Available Use-Only License 1.0](LICENSE)：
+本项目采用 [Job Copilot Source-Available Use-Only License 1.0](extension/LICENSE)：
 
 - 任何人都可以下载、安装并运行未经修改的原版软件。
 - 未经版权所有者书面许可，不得修改、制作衍生版本、再分发、转售或作为托管服务提供。
@@ -396,6 +397,6 @@ node scripts/stage-extension.js
 
 ## 第三方组件
 
-PDF 解析使用 Mozilla PDF.js `6.1.200`，其 Apache-2.0 许可文本保存在 `vendor/pdfjs/LICENSE`。
+PDF 解析使用 Mozilla PDF.js `6.1.200`，其 Apache-2.0 许可文本保存在 `extension/vendor/pdfjs/LICENSE`。
 
-项目自身代码适用根目录的 `LICENSE`。第三方组件不受该项目许可额外限制，仍按其各自许可证使用。
+项目自身代码适用 `extension/LICENSE`。第三方组件不受该项目许可额外限制，仍按其各自许可证使用。
