@@ -21,3 +21,12 @@ local-config.*
 chrome-profile/
 edge-profile/
 browser-profile/
+
+# 项目依赖与本地数据
+.env.local
+node_modules/
+__pycache__/
+.venv/
+build/
+data/*.sqlite
+data/*.db
